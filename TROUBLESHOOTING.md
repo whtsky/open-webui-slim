@@ -1,36 +1,62 @@
-# Open WebUI Troubleshooting Guide
+# Open WebUI Slim Troubleshooting Guide
 
-## Understanding the Open WebUI Architecture
+## Architecture Notes
 
-The Open WebUI system is designed to streamline interactions between the client (your browser) and the Ollama API. At the heart of this design is a backend reverse proxy, enhancing security and resolving CORS issues.
+Open WebUI Slim is API-only. It does not bundle or proxy a local Ollama runtime. Configure external providers directly through Open WebUI connections/settings or environment variables.
 
-- **How it Works**: The Open WebUI is designed to interact with the Ollama API through a specific route. When a request is made from the WebUI to Ollama, it is not directly sent to the Ollama API. Initially, the request is sent to the Open WebUI backend via `/ollama` route. From there, the backend is responsible for forwarding the request to the Ollama API. This forwarding is accomplished by using the route specified in the `OLLAMA_BASE_URL` environment variable. Therefore, a request made to `/ollama` in the WebUI is effectively the same as making a request to `OLLAMA_BASE_URL` in the backend. For instance, a request to `/ollama/api/tags` in the WebUI is equivalent to `OLLAMA_BASE_URL/api/tags` in the backend.
+## Common Startup Issues
 
-- **Security Benefits**: This design prevents direct exposure of the Ollama API to the frontend, safeguarding against potential CORS (Cross-Origin Resource Sharing) issues and unauthorized access. Requiring authentication to access the Ollama API further enhances this security layer.
+### No models appear
 
-## Open WebUI: Server Connection Error
+- Verify at least one external provider is configured.
+- For Docker, make sure provider credentials and any custom base URLs are passed into the container.
+- In the admin UI, check **Settings → Connections** and confirm the connection is enabled.
 
-If you're experiencing connection issues, it’s often due to the WebUI docker container not being able to reach the Ollama server at 127.0.0.1:11434 (host.docker.internal:11434) inside the container . Use the `--network=host` flag in your docker command to resolve this. Note that the port changes from 3000 to 8080, resulting in the link: `http://localhost:8080`.
+### RAG features fail
 
-**Example Docker Command**:
+Slim removes local embedding models. Configure an external embedding engine, for example:
 
 ```bash
-docker run -d --network=host -v open-webui:/app/backend/data -e OLLAMA_BASE_URL=http://127.0.0.1:11434 --name open-webui --restart always ghcr.io/open-webui/open-webui:main
+RAG_EMBEDDING_ENGINE=openai
+# or
+RAG_EMBEDDING_ENGINE=azure_openai
 ```
 
-### Error on Slow Responses for Ollama
+Also ensure the matching API credentials are configured.
 
-Open WebUI has a default timeout of 5 minutes for Ollama to finish generating the response. If needed, this can be adjusted via the environment variable AIOHTTP_CLIENT_TIMEOUT, which sets the timeout in seconds.
+### Speech-to-text or text-to-speech fails
 
-### General Connection Errors
+Slim removes local STT/TTS runtimes. Use external providers only.
 
-**Ensure Ollama Version is Up-to-Date**: Always start by checking that you have the latest version of Ollama. Visit [Ollama's official site](https://ollama.com/) for the latest updates.
+Examples:
 
-**Troubleshooting Steps**:
+```bash
+AUDIO_STT_ENGINE=openai
+AUDIO_TTS_ENGINE=openai
+```
 
-1. **Verify Ollama URL Format**:
-   - When running the Web UI container, ensure the `OLLAMA_BASE_URL` is correctly set. (e.g., `http://192.168.1.1:11434` for different host setups).
-   - In the Open WebUI, navigate to "Settings" > "General".
-   - Confirm that the Ollama Server URL is correctly set to `[OLLAMA URL]` (e.g., `http://localhost:11434`).
+## Docker Tips
 
-By following these enhanced troubleshooting steps, connection issues should be effectively resolved. For further assistance or queries, feel free to reach out to us on our community Discord.
+- Mount persistent app data to `/app/backend/data`.
+- Expose the WebUI container on port `8080` internally; map it to any host port you prefer.
+- If using reverse proxies, proxy only the Open WebUI app itself.
+
+Example:
+
+```bash
+docker run -d -p 3000:8080 \
+  -v open-webui:/app/backend/data \
+  -e OPENAI_API_KEY=your_key \
+  --name open-webui \
+  --restart always \
+  ghcr.io/OWNER/open-webui-slim:slim
+```
+
+## Legacy Configs
+
+If you still have older environment variables or deployment scripts referencing bundled Ollama support, remove them. Open WebUI Slim no longer supports:
+
+- `OLLAMA_BASE_URL`
+- `/ollama` backend proxy routes
+- bundled `ollama serve` startup
+- compose stacks that launch an Ollama sidecar

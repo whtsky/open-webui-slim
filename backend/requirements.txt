@@ -82,7 +82,7 @@ psutil==7.2.2
 # REMOVED for slim build: sentencepiece, soundfile (only used by local sentence-transformers and transformers TTS)
 
 pillow==12.1.1
-opencv-python-headless==4.13.0.92
+# REMOVED for slim build: opencv-python-headless (unused legacy OCR/image-processing dependency; no code imports cv2)
 # REMOVED for slim build: rapidocr-onnxruntime (local OCR inference — no code imports it; all OCR is API-based via Mistral/Datalab Marker)
 rank-bm25==0.2.2
 

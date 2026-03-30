@@ -89,7 +89,7 @@ dependencies = [
     "azure-ai-documentintelligence==1.0.2",
 
     "pillow==12.1.1",
-    "opencv-python-headless==4.13.0.92",
+    # REMOVED for slim build: opencv-python-headless (unused legacy OCR/image-processing dependency; no code imports cv2)
     # REMOVED for slim build: rapidocr-onnxruntime (local OCR inference — no code imports it; all OCR is API-based)
     "rank-bm25==0.2.2",
 

@@ -1,4 +1,4 @@
-# Contributing to Open WebUI
+# Contributing to Open WebUI Slim
 
 🚀 **Welcome, Contributors!** 🚀
 
@@ -6,14 +6,15 @@ Your interest in contributing to Open WebUI is greatly appreciated. This documen
 
 ## 📌 Key Points
 
-### 🦙 Ollama vs. Open WebUI
+### ✂️ Slim Fork Scope
 
-It's crucial to distinguish between Ollama and Open WebUI:
+This fork keeps Open WebUI focused on the web interface and external API integrations while removing bundled local ML runtime support.
 
-- **Open WebUI** focuses on providing an intuitive and responsive web interface for chat interactions.
-- **Ollama** is the underlying technology that powers these interactions.
+Please keep contributions aligned with the fork's goals:
 
-If your issue or contribution pertains directly to the core Ollama technology, please direct it to the appropriate [Ollama project repository](https://ollama.com/). Open WebUI's repository is dedicated to the web interface aspect only.
+- No bundled local model runtime or sidecar model-server support in Docker/build tooling
+- No PyTorch or local inference dependencies reintroduced through new features
+- Minimal, surgical diffs that stay easy to rebase onto upstream Open WebUI
 
 ### 🚨 Reporting Issues
 

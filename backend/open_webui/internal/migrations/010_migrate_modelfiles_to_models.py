@@ -30,6 +30,7 @@ import peewee as pw
 from peewee_migrate import Migrator
 import json
 
+# LEGACY: preserved for backward compatibility with historical Ollama-backed model data.
 from open_webui.utils.misc import parse_ollama_modelfile
 
 with suppress(ImportError):

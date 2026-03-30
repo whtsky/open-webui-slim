@@ -100,7 +100,6 @@
 			route: '/admin/settings/connections',
 			keywords: [
 				'connections',
-				'ollama',
 				'openai',
 				'api',
 				'base url',

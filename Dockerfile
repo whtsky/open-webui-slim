@@ -2,7 +2,6 @@
 # Open WebUI Slim — no PyTorch, no local ML inference, no CUDA
 # Use external APIs for embedding, reranking, STT, and TTS
 
-ARG USE_OLLAMA=false
 ARG USE_PERMISSION_HARDENING=false
 
 ARG USE_TIKTOKEN_ENCODING_NAME="cl100k_base"
@@ -35,7 +34,6 @@ RUN npm run build
 FROM python:3.12-slim-bookworm AS base
 
 # Use args
-ARG USE_OLLAMA
 ARG USE_PERMISSION_HARDENING
 ARG UID
 ARG GID
@@ -46,14 +44,11 @@ ENV PYTHONUNBUFFERED=1
 ## Basis ##
 ENV ENV=prod \
     PORT=8080 \
-    # pass build args to the build
-    USE_OLLAMA_DOCKER=${USE_OLLAMA} \
     USE_CUDA_DOCKER=false \
     USE_SLIM_DOCKER=true
 
-## Basis URL Config ##
-ENV OLLAMA_BASE_URL="/ollama" \
-    OPENAI_API_BASE_URL=""
+## Provider URL Config ##
+ENV OPENAI_API_BASE_URL=""
 
 ## API Key and Security Config ##
 ENV OPENAI_API_KEY="" \
@@ -113,14 +108,6 @@ RUN set -e; \
     python -c "import nltk; nltk.download('punkt_tab')"; \
     mkdir -p /app/backend/data; chown -R $UID:$GID /app/backend/data/; \
     rm -rf /var/lib/apt/lists/*;
-
-# Install Ollama if requested
-RUN if [ "$USE_OLLAMA" = "true" ]; then \
-    date +%s > /tmp/ollama_build_hash && \
-    echo "Cache broken at timestamp: `cat /tmp/ollama_build_hash`" && \
-    curl -fsSL https://ollama.com/install.sh | sh && \
-    rm -rf /var/lib/apt/lists/*; \
-    fi
 
 # copy embedding weight from build
 # RUN mkdir -p /root/.cache/chroma/onnx_models/all-MiniLM-L6-v2

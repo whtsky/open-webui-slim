@@ -36,8 +36,7 @@ if test "$WEBUI_SECRET_KEY $WEBUI_JWT_SECRET_KEY" = " "; then
 fi
 
 if [[ "${USE_OLLAMA_DOCKER,,}" == "true" ]]; then
-    echo "USE_OLLAMA is set to true, starting ollama serve."
-    ollama serve &
+    echo "USE_OLLAMA_DOCKER is no longer supported in Open WebUI Slim; bundled Ollama runtime was removed."
 fi
 
 if [[ "${USE_CUDA_DOCKER,,}" == "true" ]]; then

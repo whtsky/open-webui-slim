@@ -6,7 +6,7 @@
 
 Upstream Open WebUI bundles PyTorch and local ML models for embedding, reranking, speech-to-text, and text-to-speech. This adds ~2.5 GB of Python packages (CPU) plus ~500 MB of pre-downloaded models to the Docker image, even when you're using external API providers for all of these.
 
-This fork removes those local ML features entirely, producing a leaner image for deployments that use external APIs (OpenAI, Ollama, Azure, Deepgram, ElevenLabs, etc.) for inference.
+This fork removes those local ML features entirely, producing a leaner image for deployments that use external APIs (OpenAI, Azure, Deepgram, ElevenLabs, etc.) for inference.
 
 ## What's Removed
 
@@ -15,7 +15,7 @@ The following packages have been removed from `requirements.txt` and `pyproject.
 | Package | What it powered | Alternative |
 |---|---|---|
 | `torch`, `torchvision`, `torchaudio` | PyTorch runtime (~1.5 GB CPU) | Not needed — all local ML removed |
-| `sentence-transformers` | Local RAG embedding & CrossEncoder reranking | Set `RAG_EMBEDDING_ENGINE` to `openai` or `ollama` |
+| `sentence-transformers` | Local RAG embedding & CrossEncoder reranking | Set `RAG_EMBEDDING_ENGINE` to `openai` or `azure_openai` |
 | `transformers` | Local TTS via `microsoft/speecht5_tts` | Set `AUDIO_TTS_ENGINE` to `openai`, `elevenlabs`, or `azure` |
 | `accelerate` | PyTorch GPU acceleration | Not needed |
 | `faster-whisper` | Local Whisper speech-to-text | Set `AUDIO_STT_ENGINE` to `openai`, `deepgram`, or `azure` |
@@ -25,12 +25,14 @@ The following packages have been removed from `requirements.txt` and `pyproject.
 | `soundfile` | Audio I/O for local TTS | Not needed |
 | `einops` | Tensor operations for sentence-transformers | Not needed |
 | `pyarrow` | DataFrame serialization for datasets | Not needed |
+| `opencv-python-headless` | Legacy local OCR/image-processing dependency | Not needed — no code imports `cv2`; local OCR is removed/API-based |
 
-Also removed from Dockerfile:
+Also removed from container/build tooling:
 - Explicit `pip install torch torchvision torchaudio` step
 - All CUDA build args and logic (`USE_CUDA`, `USE_CUDA_VER`)
 - All ML model pre-downloads (sentence-transformers models, Whisper model)
 - Build-time compilation dependencies (`build-essential`, `gcc`, `python3-dev`, `libmariadb-dev`, `libsm6`, `libxext6`)
+- Bundled local model-server Docker/Compose sidecars and helper scripts
 
 ### Source code changes
 
@@ -46,8 +48,8 @@ Backend Python files modified to return clear error messages if local ML feature
 
 Everything else from upstream Open WebUI v0.8.12:
 
-- All LLM chat features (Ollama, OpenAI-compatible APIs)
-- RAG with external embedding providers (OpenAI, Ollama, Azure OpenAI)
+- All LLM chat features via OpenAI-compatible APIs
+- RAG with external embedding providers (OpenAI, Azure OpenAI)
 - External reranking via API
 - Web search integration (SearXNG, Google PSE, Brave, DuckDuckGo, etc.)
 - All authentication methods (LDAP, SSO, OAuth, SCIM)
@@ -78,13 +80,27 @@ docker run -d -p 3000:8080 \
 
 Replace `OWNER` with your GitHub username/org. The image is built automatically on push to the `slim` branch.
 
+### Docker Compose
+
+The root compose stack now runs only Open WebUI Slim:
+
+```bash
+docker compose up -d --build
+```
+
+To use a bind mount instead of the default named volume:
+
+```bash
+OPEN_WEBUI_DATA_SOURCE=./open-webui-data docker compose up -d --build
+```
+
 ### Required Configuration
 
 Since local ML is removed, you must configure external providers:
 
 ```bash
 # RAG Embedding (required for RAG features)
-RAG_EMBEDDING_ENGINE=openai        # or "ollama"
+RAG_EMBEDDING_ENGINE=openai        # or "azure_openai"
 
 # Speech-to-Text (optional)
 AUDIO_STT_ENGINE=openai            # or "deepgram", "azure", "mistral"

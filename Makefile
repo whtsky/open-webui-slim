@@ -21,13 +21,10 @@ stop:
 	$(DOCKER_COMPOSE) stop
 
 update:
-	# Calls the LLM update script
-	chmod +x update_ollama_models.sh
-	@./update_ollama_models.sh
+	# Update local checkout and recreate containers
 	@git pull
 	$(DOCKER_COMPOSE) down
-	# Make sure the ollama-webui container is stopped before rebuilding
+	# Make sure the open-webui container is stopped before rebuilding
 	@docker stop open-webui || true
 	$(DOCKER_COMPOSE) up --build -d
 	$(DOCKER_COMPOSE) start
-
