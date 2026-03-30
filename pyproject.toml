@@ -90,7 +90,7 @@ dependencies = [
 
     "pillow==12.1.1",
     "opencv-python-headless==4.13.0.92",
-    "rapidocr-onnxruntime==1.4.4",
+    # REMOVED for slim build: rapidocr-onnxruntime (local OCR inference — no code imports it; all OCR is API-based)
     "rank-bm25==0.2.2",
 
     # REMOVED for slim build: onnxruntime, faster-whisper (local Whisper STT)
