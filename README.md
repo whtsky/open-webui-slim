@@ -12,37 +12,44 @@ This fork removes those local ML features entirely, producing a leaner image for
 
 The following packages have been removed from `requirements.txt` and `pyproject.toml`:
 
-| Package | What it powered | Alternative |
-|---|---|---|
-| `torch`, `torchvision`, `torchaudio` | PyTorch runtime (~1.5 GB CPU) | Not needed — all local ML removed |
-| `sentence-transformers` | Local RAG embedding & CrossEncoder reranking | Set `RAG_EMBEDDING_ENGINE` to `openai` or `azure_openai` |
-| `transformers` | Local TTS via `microsoft/speecht5_tts` | Set `AUDIO_TTS_ENGINE` to `openai`, `elevenlabs`, or `azure` |
-| `accelerate` | PyTorch GPU acceleration | Not needed |
-| `faster-whisper` | Local Whisper speech-to-text | Set `AUDIO_STT_ENGINE` to `openai`, `deepgram`, or `azure` |
-| `onnxruntime` | ONNX inference backend for faster-whisper | Not needed |
-| `colbert-ai` | ColBERT dense reranking | Set `RAG_RERANKING_ENGINE` to `external` |
-| `sentencepiece` | Tokenizer for transformers/sentence-transformers | Not needed |
-| `soundfile` | Audio I/O for local TTS | Not needed |
-| `einops` | Tensor operations for sentence-transformers | Not needed |
-| `pyarrow` | DataFrame serialization for datasets | Not needed |
-| `opencv-python-headless` | Legacy local OCR/image-processing dependency | Not needed — no code imports `cv2`; local OCR is removed/API-based |
+| Package                              | What it powered                                  | Alternative                                                        |
+| ------------------------------------ | ------------------------------------------------ | ------------------------------------------------------------------ |
+| `torch`, `torchvision`, `torchaudio` | PyTorch runtime (~1.5 GB CPU)                    | Not needed — all local ML removed                                  |
+| `sentence-transformers`              | Local RAG embedding & CrossEncoder reranking     | Set `RAG_EMBEDDING_ENGINE` to `openai` or `azure_openai`           |
+| `transformers`                       | Local TTS via `microsoft/speecht5_tts`           | Set `AUDIO_TTS_ENGINE` to `openai`, `elevenlabs`, or `azure`       |
+| `accelerate`                         | PyTorch GPU acceleration                         | Not needed                                                         |
+| `faster-whisper`                     | Local Whisper speech-to-text                     | Set `AUDIO_STT_ENGINE` to `openai`, `deepgram`, or `azure`         |
+| `onnxruntime`                        | ONNX inference backend for faster-whisper        | Not needed                                                         |
+| `colbert-ai`                         | ColBERT dense reranking                          | Set `RAG_RERANKING_ENGINE` to `external`                           |
+| `sentencepiece`                      | Tokenizer for transformers/sentence-transformers | Not needed                                                         |
+| `soundfile`                          | Audio I/O for local TTS                          | Not needed                                                         |
+| `einops`                             | Tensor operations for sentence-transformers      | Not needed                                                         |
+| `pyarrow`                            | DataFrame serialization for datasets             | Not needed                                                         |
+| `opencv-python-headless`             | Legacy local OCR/image-processing dependency     | Not needed — no code imports `cv2`; local OCR is removed/API-based |
 
 Also removed from container/build tooling:
+
 - Explicit `pip install torch torchvision torchaudio` step
 - All CUDA build args and logic (`USE_CUDA`, `USE_CUDA_VER`)
 - All ML model pre-downloads (sentence-transformers models, Whisper model)
 - Build-time compilation dependencies (`build-essential`, `gcc`, `python3-dev`, `libmariadb-dev`, `libsm6`, `libxext6`)
 - Bundled local model-server Docker/Compose sidecars and helper scripts
+- All Ollama integration code and UI (backend `/ollama` routes, model management UI, connection settings, and Ollama-specific search/embedding paths)
 
 ### Source code changes
 
 Backend Python files modified to return clear error messages if local ML features are attempted:
+
 - `backend/open_webui/env.py` — Removed torch CUDA/MPS detection; always sets `DEVICE_TYPE='cpu'`
 - `backend/open_webui/__init__.py` — Removed CUDA LD_LIBRARY_PATH setup and torch validation
 - `backend/open_webui/routers/retrieval.py` — Local embedding (`get_ef`) and local reranking (`get_rf`) raise errors directing users to external engines; removed `torch.cuda.empty_cache()` calls
 - `backend/open_webui/routers/audio.py` — `set_faster_whisper_model()` returns None with warning; `load_speech_pipeline()` raises NotImplementedError; transformers TTS endpoint returns 501
 - `backend/open_webui/routers/evaluations.py` — `_get_embedding_model()` returns None with warning (query-weighted leaderboard filtering disabled)
 - `backend/open_webui/retrieval/utils.py` — Replaced `sentence_transformers.util.cos_sim` with numpy-based cosine similarity
+
+Additional slim-only removal in this fork:
+
+- Ollama support has been fully removed from backend routing, frontend settings/model management, Docker/Compose helpers, and related documentation/config. This fork is now strictly external-provider / OpenAI-compatible API based.
 
 ## What's Kept
 
