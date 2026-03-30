@@ -58,15 +58,13 @@ _embedding_model = None
 
 
 def _get_embedding_model():
-    global _embedding_model
-    if _embedding_model is None:
-        try:
-            from sentence_transformers import SentenceTransformer
-
-            _embedding_model = SentenceTransformer(EMBEDDING_MODEL_NAME)
-        except Exception as e:
-            log.error(f'Embedding model load failed: {e}')
-    return _embedding_model
+    # SLIM BUILD: Local sentence-transformers not available.
+    # Evaluation leaderboard query-based filtering is disabled.
+    log.warning(
+        'Local embedding model for evaluations is not available in slim build. '
+        'Query-weighted leaderboard filtering is disabled.'
+    )
+    return None
 
 
 def _calculate_elo(feedbacks: list[LeaderboardFeedbackData], similarities: dict = None) -> dict:

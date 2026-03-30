@@ -784,6 +784,16 @@ def get_embedding_function(
     concurrent_requests=0,
 ) -> Awaitable:
     if embedding_engine == '':
+        if embedding_function is None:
+            # SLIM BUILD: Local sentence-transformers is not available.
+            async def unavailable_embedding_function(query, prefix=None, user=None):
+                raise ValueError(
+                    'Local embedding (sentence-transformers) is not available in the slim build. '
+                    'Set RAG_EMBEDDING_ENGINE to "openai", "ollama", or "azure_openai".'
+                )
+
+            return unavailable_embedding_function
+
         # Sentence transformers: CPU-bound sync operation
         async def async_embedding_function(query, prefix=None, user=None):
             return await asyncio.to_thread(
@@ -1265,13 +1275,27 @@ class RerankCompressor(BaseDocumentCompressor):
         if reranking:
             scores = await asyncio.to_thread(self.reranking_function, query, documents)
         else:
-            from sentence_transformers import util
+            # SLIM BUILD: sentence_transformers.util.cos_sim not available.
+            # Use a simple cosine similarity fallback with numpy.
+            import numpy as np
 
             query_embedding = await self.embedding_function(query, RAG_EMBEDDING_QUERY_PREFIX)
             document_embedding = await self.embedding_function(
                 [doc.page_content for doc in documents], RAG_EMBEDDING_CONTENT_PREFIX
             )
-            scores = util.cos_sim(query_embedding, document_embedding)[0]
+
+            # Convert to numpy arrays for cosine similarity
+            q = np.array(query_embedding)
+            d = np.array(document_embedding)
+            if q.ndim == 1:
+                q = q.reshape(1, -1)
+            if d.ndim == 1:
+                d = d.reshape(1, -1)
+            # Cosine similarity: dot(q, d^T) / (||q|| * ||d||)
+            q_norm = q / (np.linalg.norm(q, axis=1, keepdims=True) + 1e-8)
+            d_norm = d / (np.linalg.norm(d, axis=1, keepdims=True) + 1e-8)
+            scores = (q_norm @ d_norm.T)[0]
+            scores = scores.tolist()
 
         if scores is not None:
             docs_with_scores = list(

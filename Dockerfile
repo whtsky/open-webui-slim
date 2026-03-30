@@ -1,21 +1,10 @@
 # syntax=docker/dockerfile:1
-# Initialize device type args
-# use build args in the docker build command with --build-arg="BUILDARG=true"
-ARG USE_CUDA=false
-ARG USE_OLLAMA=false
-ARG USE_SLIM=false
-ARG USE_PERMISSION_HARDENING=false
-# Tested with cu117 for CUDA 11 and cu121 for CUDA 12 (default)
-ARG USE_CUDA_VER=cu128
-# any sentence transformer model; models to use can be found at https://huggingface.co/models?library=sentence-transformers
-# Leaderboard: https://huggingface.co/spaces/mteb/leaderboard 
-# for better performance and multilangauge support use "intfloat/multilingual-e5-large" (~2.5GB) or "intfloat/multilingual-e5-base" (~1.5GB)
-# IMPORTANT: If you change the embedding model (sentence-transformers/all-MiniLM-L6-v2) and vice versa, you aren't able to use RAG Chat with your previous documents loaded in the WebUI! You need to re-embed them.
-ARG USE_EMBEDDING_MODEL=sentence-transformers/all-MiniLM-L6-v2
-ARG USE_RERANKING_MODEL=""
-ARG USE_AUXILIARY_EMBEDDING_MODEL=TaylorAI/bge-micro-v2
+# Open WebUI Slim — no PyTorch, no local ML inference, no CUDA
+# Use external APIs for embedding, reranking, STT, and TTS
 
-# Tiktoken encoding name; models to use can be found at https://huggingface.co/models?library=tiktoken
+ARG USE_OLLAMA=false
+ARG USE_PERMISSION_HARDENING=false
+
 ARG USE_TIKTOKEN_ENCODING_NAME="cl100k_base"
 
 ARG BUILD_HASH=dev-build
@@ -46,14 +35,8 @@ RUN npm run build
 FROM python:3.11.14-slim-bookworm AS base
 
 # Use args
-ARG USE_CUDA
 ARG USE_OLLAMA
-ARG USE_CUDA_VER
-ARG USE_SLIM
 ARG USE_PERMISSION_HARDENING
-ARG USE_EMBEDDING_MODEL
-ARG USE_RERANKING_MODEL
-ARG USE_AUXILIARY_EMBEDDING_MODEL
 ARG UID
 ARG GID
 
@@ -65,12 +48,8 @@ ENV ENV=prod \
     PORT=8080 \
     # pass build args to the build
     USE_OLLAMA_DOCKER=${USE_OLLAMA} \
-    USE_CUDA_DOCKER=${USE_CUDA} \
-    USE_SLIM_DOCKER=${USE_SLIM} \
-    USE_CUDA_DOCKER_VER=${USE_CUDA_VER} \
-    USE_EMBEDDING_MODEL_DOCKER=${USE_EMBEDDING_MODEL} \
-    USE_RERANKING_MODEL_DOCKER=${USE_RERANKING_MODEL} \
-    USE_AUXILIARY_EMBEDDING_MODEL_DOCKER=${USE_AUXILIARY_EMBEDDING_MODEL}
+    USE_CUDA_DOCKER=false \
+    USE_SLIM_DOCKER=true
 
 ## Basis URL Config ##
 ENV OLLAMA_BASE_URL="/ollama" \
@@ -84,14 +63,13 @@ ENV OPENAI_API_KEY="" \
     ANONYMIZED_TELEMETRY=false
 
 #### Other models #########################################################
-## whisper TTS model settings ##
+## whisper TTS model settings (kept for config compat, but local whisper is removed) ##
 ENV WHISPER_MODEL="base" \
     WHISPER_MODEL_DIR="/app/backend/data/cache/whisper/models"
 
-## RAG Embedding model settings ##
-ENV RAG_EMBEDDING_MODEL="$USE_EMBEDDING_MODEL_DOCKER" \
-    RAG_RERANKING_MODEL="$USE_RERANKING_MODEL_DOCKER" \
-    AUXILIARY_EMBEDDING_MODEL="$USE_AUXILIARY_EMBEDDING_MODEL_DOCKER" \
+## RAG Embedding model settings (local sentence-transformers removed, use external APIs) ##
+ENV RAG_EMBEDDING_MODEL="" \
+    RAG_RERANKING_MODEL="" \
     SENTENCE_TRANSFORMERS_HOME="/app/backend/data/cache/embedding/models"
 
 ## Tiktoken model settings ##
@@ -100,11 +78,6 @@ ENV TIKTOKEN_ENCODING_NAME="cl100k_base" \
 
 ## Hugging Face download cache ##
 ENV HF_HOME="/app/backend/data/cache/embedding/models"
-
-## Torch Extensions ##
-# ENV TORCH_EXTENSIONS_DIR="/.cache/torch_extensions"
-
-#### Other models ##########################################################
 
 WORKDIR /app/backend
 
@@ -123,41 +96,21 @@ RUN echo -n 00000000-0000-0000-0000-000000000000 > $HOME/.cache/chroma/telemetry
 # Make sure the user has access to the app and root directory
 RUN chown -R $UID:$GID /app $HOME
 
-# Install common system dependencies
+# Install common system dependencies (slim: removed build-essential, python3-dev, libsm6, libxext6 — not needed without torch/opencv compilation)
 RUN apt-get update && \
     apt-get install -y --no-install-recommends \
-    git build-essential pandoc gcc netcat-openbsd curl jq \
-    libmariadb-dev \
-    python3-dev \
-    ffmpeg libsm6 libxext6 zstd \
+    git pandoc netcat-openbsd curl jq \
+    ffmpeg zstd \
     && rm -rf /var/lib/apt/lists/*
 
-# install python dependencies
+# install python dependencies (slim: no torch, no model downloads)
 COPY --chown=$UID:$GID ./backend/requirements.txt ./requirements.txt
 
 RUN set -e; \
     pip3 install --no-cache-dir uv; \
-    if [ "$USE_CUDA" = "true" ]; then \
-    # If you use CUDA the whisper and embedding model will be downloaded on first use
-    # fix: pin torch<=2.9.1 - torch 2.10.0 aarch64 wheels cause SIGILL on ARM devices (RPi 4 Cortex-A72) #21349
-    pip3 install 'torch<=2.9.1' torchvision torchaudio --index-url https://download.pytorch.org/whl/$USE_CUDA_DOCKER_VER --no-cache-dir; \
     uv pip install --system -r requirements.txt --no-cache-dir; \
-    python -c "import os; from sentence_transformers import SentenceTransformer; SentenceTransformer(os.environ['RAG_EMBEDDING_MODEL'], device='cpu')"; \
-    python -c "import os; from sentence_transformers import SentenceTransformer; SentenceTransformer(os.environ.get('AUXILIARY_EMBEDDING_MODEL', 'TaylorAI/bge-micro-v2'), device='cpu')"; \
-    python -c "import os; from faster_whisper import WhisperModel; WhisperModel(os.environ['WHISPER_MODEL'], device='cpu', compute_type='int8', download_root=os.environ['WHISPER_MODEL_DIR'])"; \
     python -c "import os; import tiktoken; tiktoken.get_encoding(os.environ['TIKTOKEN_ENCODING_NAME'])"; \
     python -c "import nltk; nltk.download('punkt_tab')"; \
-    else \
-    pip3 install 'torch<=2.9.1' torchvision torchaudio --index-url https://download.pytorch.org/whl/cpu --no-cache-dir; \
-    uv pip install --system -r requirements.txt --no-cache-dir; \
-    if [ "$USE_SLIM" != "true" ]; then \
-    python -c "import os; from sentence_transformers import SentenceTransformer; SentenceTransformer(os.environ['RAG_EMBEDDING_MODEL'], device='cpu')"; \
-    python -c "import os; from sentence_transformers import SentenceTransformer; SentenceTransformer(os.environ.get('AUXILIARY_EMBEDDING_MODEL', 'TaylorAI/bge-micro-v2'), device='cpu')"; \
-    python -c "import os; from faster_whisper import WhisperModel; WhisperModel(os.environ['WHISPER_MODEL'], device='cpu', compute_type='int8', download_root=os.environ['WHISPER_MODEL_DIR'])"; \
-    python -c "import os; import tiktoken; tiktoken.get_encoding(os.environ['TIKTOKEN_ENCODING_NAME'])"; \
-    python -c "import nltk; nltk.download('punkt_tab')"; \
-    fi; \
-    fi; \
     mkdir -p /app/backend/data; chown -R $UID:$GID /app/backend/data/; \
     rm -rf /var/lib/apt/lists/*;
 

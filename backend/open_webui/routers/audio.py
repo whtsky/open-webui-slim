@@ -128,25 +128,12 @@ def convert_audio_to_mp3(file_path):
 
 
 def set_faster_whisper_model(model: str, auto_update: bool = False):
-    whisper_model = None
-    if model:
-        from faster_whisper import WhisperModel
-
-        faster_whisper_kwargs = {
-            'model_size_or_path': model,
-            'device': DEVICE_TYPE if DEVICE_TYPE and DEVICE_TYPE == 'cuda' else 'cpu',
-            'compute_type': WHISPER_COMPUTE_TYPE,
-            'download_root': WHISPER_MODEL_DIR,
-            'local_files_only': not auto_update,
-        }
-
-        try:
-            whisper_model = WhisperModel(**faster_whisper_kwargs)
-        except Exception:
-            log.warning('WhisperModel initialization failed, attempting download with local_files_only=False')
-            faster_whisper_kwargs['local_files_only'] = False
-            whisper_model = WhisperModel(**faster_whisper_kwargs)
-    return whisper_model
+    # SLIM BUILD: Local Whisper is not available. Use STT_ENGINE=openai, deepgram, or azure instead.
+    log.warning(
+        'Local Whisper STT (faster-whisper) is not available in slim build. '
+        'Set AUDIO_STT_ENGINE to "openai", "deepgram", or "azure".'
+    )
+    return None
 
 
 ##########################################
@@ -302,16 +289,11 @@ async def update_audio_config(request: Request, form_data: AudioConfigUpdateForm
 
 
 def load_speech_pipeline(request):
-    from transformers import pipeline
-    from datasets import load_dataset
-
-    if request.app.state.speech_synthesiser is None:
-        request.app.state.speech_synthesiser = pipeline('text-to-speech', 'microsoft/speecht5_tts')
-
-    if request.app.state.speech_speaker_embeddings_dataset is None:
-        request.app.state.speech_speaker_embeddings_dataset = load_dataset(
-            'Matthijs/cmu-arctic-xvectors', split='validation'
-        )
+    # SLIM BUILD: Transformers TTS is not available.
+    raise NotImplementedError(
+        'Transformers TTS (microsoft/speecht5_tts) is not available in slim build. '
+        'Set AUDIO_TTS_ENGINE to "openai", "elevenlabs", or "azure".'
+    )
 
 
 @router.post('/speech')
@@ -517,39 +499,10 @@ async def speech(request: Request, user=Depends(get_verified_user)):
             )
 
     elif request.app.state.config.TTS_ENGINE == 'transformers':
-        payload = None
-        try:
-            payload = json.loads(body.decode('utf-8'))
-        except Exception as e:
-            log.exception(e)
-            raise HTTPException(status_code=400, detail='Invalid JSON payload')
-
-        import torch
-        import soundfile as sf
-
-        load_speech_pipeline(request)
-
-        embeddings_dataset = request.app.state.speech_speaker_embeddings_dataset
-
-        speaker_index = 6799
-        try:
-            speaker_index = embeddings_dataset['filename'].index(request.app.state.config.TTS_MODEL)
-        except Exception:
-            pass
-
-        speaker_embedding = torch.tensor(embeddings_dataset[speaker_index]['xvector']).unsqueeze(0)
-
-        speech = request.app.state.speech_synthesiser(
-            payload['input'],
-            forward_params={'speaker_embeddings': speaker_embedding},
+        raise HTTPException(
+            status_code=status.HTTP_501_NOT_IMPLEMENTED,
+            detail='Transformers TTS is not available in slim build. Set AUDIO_TTS_ENGINE to "openai", "elevenlabs", or "azure".',
         )
-
-        sf.write(file_path, speech['audio'], samplerate=speech['sampling_rate'])
-
-        async with aiofiles.open(file_body_path, 'w') as f:
-            await f.write(json.dumps(payload))
-
-        return FileResponse(file_path)
 
 
 def transcription_handler(request, file_path, metadata, user=None):
@@ -565,29 +518,11 @@ def transcription_handler(request, file_path, metadata, user=None):
     ]
 
     if request.app.state.config.STT_ENGINE == '':
-        if request.app.state.faster_whisper_model is None:
-            request.app.state.faster_whisper_model = set_faster_whisper_model(request.app.state.config.WHISPER_MODEL)
-
-        model = request.app.state.faster_whisper_model
-        segments, info = model.transcribe(
-            file_path,
-            beam_size=5,
-            vad_filter=WHISPER_VAD_FILTER,
-            language=languages[0],
-            multilingual=WHISPER_MULTILINGUAL,
+        raise HTTPException(
+            status_code=status.HTTP_501_NOT_IMPLEMENTED,
+            detail='Local Whisper STT (faster-whisper) is not available in the slim build. '
+            'Set AUDIO_STT_ENGINE to "openai", "deepgram", or "azure".',
         )
-        log.info("Detected language '%s' with probability %f" % (info.language, info.language_probability))
-
-        transcript = ''.join([segment.text for segment in list(segments)])
-        data = {'text': transcript.strip()}
-
-        # save the transcript to a json file
-        transcript_file = f'{file_dir}/{id}.json'
-        with open(transcript_file, 'w') as f:
-            json.dump(data, f)
-
-        log.debug(data)
-        return data
     elif request.app.state.config.STT_ENGINE == 'openai':
         r = None
         try:

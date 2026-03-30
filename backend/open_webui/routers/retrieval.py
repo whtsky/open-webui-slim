@@ -140,18 +140,10 @@ def get_ef(
 ):
     ef = None
     if embedding_model and engine == '':
-        from sentence_transformers import SentenceTransformer
-
-        try:
-            ef = SentenceTransformer(
-                get_model_path(embedding_model, auto_update),
-                device=DEVICE_TYPE,
-                trust_remote_code=RAG_EMBEDDING_MODEL_TRUST_REMOTE_CODE,
-                backend=SENTENCE_TRANSFORMERS_BACKEND,
-                model_kwargs=SENTENCE_TRANSFORMERS_MODEL_KWARGS,
-            )
-        except Exception as e:
-            log.debug(f'Error loading SentenceTransformer: {e}')
+        raise ValueError(
+            'Local embedding (sentence-transformers) is not available in slim build. '
+            'Set RAG_EMBEDDING_ENGINE to "openai" or "ollama" in your environment.'
+        )
 
     return ef
 
@@ -169,17 +161,10 @@ def get_rf(
     timeout_value = int(external_reranker_timeout) if external_reranker_timeout else None
     if reranking_model:
         if any(model in reranking_model for model in ['jinaai/jina-colbert-v2']):
-            try:
-                from open_webui.retrieval.models.colbert import ColBERT
-
-                rf = ColBERT(
-                    get_model_path(reranking_model, auto_update),
-                    env='docker' if DOCKER else None,
-                )
-
-            except Exception as e:
-                log.error(f'ColBERT: {e}')
-                raise Exception(ERROR_MESSAGES.DEFAULT(e))
+            raise ValueError(
+                'ColBERT reranking is not available in slim build. '
+                'Set RAG_RERANKING_ENGINE to "external" or clear RAG_RERANKING_MODEL.'
+            )
         else:
             if engine == 'external':
                 try:
@@ -195,41 +180,10 @@ def get_rf(
                     log.error(f'ExternalReranking: {e}')
                     raise Exception(ERROR_MESSAGES.DEFAULT(e))
             else:
-                import sentence_transformers
-                import torch
-
-                try:
-                    rf = sentence_transformers.CrossEncoder(
-                        get_model_path(reranking_model, auto_update),
-                        device=DEVICE_TYPE,
-                        trust_remote_code=RAG_RERANKING_MODEL_TRUST_REMOTE_CODE,
-                        backend=SENTENCE_TRANSFORMERS_CROSS_ENCODER_BACKEND,
-                        model_kwargs=SENTENCE_TRANSFORMERS_CROSS_ENCODER_MODEL_KWARGS,
-                        activation_fn=(
-                            torch.nn.Sigmoid()
-                            if SENTENCE_TRANSFORMERS_CROSS_ENCODER_SIGMOID_ACTIVATION_FUNCTION
-                            else None
-                        ),
-                    )
-                except Exception as e:
-                    log.error(f'CrossEncoder: {e}')
-                    raise Exception(ERROR_MESSAGES.DEFAULT('CrossEncoder error'))
-
-                # Safely adjust pad_token_id if missing as some models do not have this in config
-                try:
-                    model_cfg = getattr(rf, 'model', None)
-                    if model_cfg and hasattr(model_cfg, 'config'):
-                        cfg = model_cfg.config
-                        if getattr(cfg, 'pad_token_id', None) is None:
-                            # Fallback to eos_token_id when available
-                            eos = getattr(cfg, 'eos_token_id', None)
-                            if eos is not None:
-                                cfg.pad_token_id = eos
-                                log.debug(f'Missing pad_token_id detected; set to eos_token_id={eos}')
-                            else:
-                                log.warning('Neither pad_token_id nor eos_token_id present in model config')
-                except Exception as e2:
-                    log.warning(f'Failed to adjust pad_token_id on CrossEncoder: {e2}')
+                raise ValueError(
+                    'Local reranking (sentence-transformers CrossEncoder) is not available in slim build. '
+                    'Set RAG_RERANKING_ENGINE to "external" or clear RAG_RERANKING_MODEL.'
+                )
 
     return rf
 
@@ -326,17 +280,12 @@ class EmbeddingModelUpdateForm(BaseModel):
 
 def unload_embedding_model(request: Request):
     if request.app.state.config.RAG_EMBEDDING_ENGINE == '':
-        # unloads current internal embedding model and clears VRAM cache
+        # unloads current internal embedding model and clears cache
         request.app.state.ef = None
         request.app.state.EMBEDDING_FUNCTION = None
         import gc
 
         gc.collect()
-        if DEVICE_TYPE == 'cuda':
-            import torch
-
-            if torch.cuda.is_available():
-                torch.cuda.empty_cache()
 
 
 @router.post('/embedding/update')
@@ -344,6 +293,13 @@ async def update_embedding_config(request: Request, form_data: EmbeddingModelUpd
     log.info(
         f'Updating embedding model: {request.app.state.config.RAG_EMBEDDING_MODEL} to {form_data.RAG_EMBEDDING_MODEL}'
     )
+
+    # Save current state so we can restore on failure
+    prev_ef = request.app.state.ef
+    prev_embedding_function = request.app.state.EMBEDDING_FUNCTION
+    prev_engine = request.app.state.config.RAG_EMBEDDING_ENGINE
+    prev_model = request.app.state.config.RAG_EMBEDDING_MODEL
+
     unload_embedding_model(request)
     try:
         request.app.state.config.RAG_EMBEDDING_ENGINE = form_data.RAG_EMBEDDING_ENGINE
@@ -430,6 +386,11 @@ async def update_embedding_config(request: Request, form_data: EmbeddingModelUpd
         }
     except Exception as e:
         log.exception(f'Problem updating embedding model: {e}')
+        # Restore previous state so embedding stays functional
+        request.app.state.ef = prev_ef
+        request.app.state.EMBEDDING_FUNCTION = prev_embedding_function
+        request.app.state.config.RAG_EMBEDDING_ENGINE = prev_engine
+        request.app.state.config.RAG_EMBEDDING_MODEL = prev_model
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=ERROR_MESSAGES.DEFAULT(e),
@@ -904,17 +865,12 @@ async def update_rag_config(request: Request, form_data: ConfigForm, user=Depend
 
     # Reranking settings
     if request.app.state.config.RAG_RERANKING_ENGINE == '':
-        # Unloading the internal reranker and clear VRAM memory
+        # Unloading the internal reranker and clear memory
         request.app.state.rf = None
         request.app.state.RERANKING_FUNCTION = None
         import gc
 
         gc.collect()
-        if DEVICE_TYPE == 'cuda':
-            import torch
-
-            if torch.cuda.is_available():
-                torch.cuda.empty_cache()
     request.app.state.config.RAG_RERANKING_ENGINE = (
         form_data.RAG_RERANKING_ENGINE
         if form_data.RAG_RERANKING_ENGINE is not None
