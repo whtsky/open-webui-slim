@@ -42,7 +42,8 @@ fi
 
 if [[ "${USE_CUDA_DOCKER,,}" == "true" ]]; then
   echo "CUDA is enabled, appending LD_LIBRARY_PATH to include torch/cudnn & cublas libraries."
-  export LD_LIBRARY_PATH="$LD_LIBRARY_PATH:/usr/local/lib/python3.11/site-packages/torch/lib:/usr/local/lib/python3.11/site-packages/nvidia/cudnn/lib"
+  # SLIM BUILD: CUDA is not supported, but keep this for script compat
+  export LD_LIBRARY_PATH="$LD_LIBRARY_PATH:/usr/local/lib/python3.12/site-packages/torch/lib:/usr/local/lib/python3.12/site-packages/nvidia/cudnn/lib"
 fi
 
 # Check if SPACE_ID is set, if so, configure for space
