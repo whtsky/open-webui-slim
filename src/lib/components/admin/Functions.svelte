@@ -33,7 +33,6 @@
 	import GarbageBin from '../icons/GarbageBin.svelte';
 	import Search from '../icons/Search.svelte';
 	import Plus from '../icons/Plus.svelte';
-	import ChevronRight from '../icons/ChevronRight.svelte';
 	import XMark from '../icons/XMark.svelte';
 	import AddFunctionMenu from './Functions/AddFunctionMenu.svelte';
 	import ImportModal from '../ImportModal.svelte';
@@ -99,33 +98,6 @@
 			)
 			.sort((a, b) => a.type.localeCompare(b.type) || a.name.localeCompare(b.name));
 	};
-	const shareHandler = async (func) => {
-		const item = await getFunctionById(localStorage.token, func.id).catch((error) => {
-			toast.error(`${error}`);
-			return null;
-		});
-
-		toast.success($i18n.t('Redirecting you to Open WebUI Community'));
-
-		const url = 'https://openwebui.com';
-
-		const tab = await window.open(`${url}/functions/create`, '_blank');
-
-		// Define the event handler function
-		const messageHandler = (event) => {
-			if (event.origin !== url) return;
-			if (event.data === 'loaded') {
-				tab.postMessage(JSON.stringify(item), '*');
-
-				// Remove the event listener after handling the message
-				window.removeEventListener('message', messageHandler);
-			}
-		};
-
-		window.addEventListener('message', messageHandler, false);
-		console.log(item);
-	};
-
 	const cloneHandler = async (func) => {
 		const _function = await getFunctionById(localStorage.token, func.id).catch((error) => {
 			toast.error(`${error}`);
@@ -531,9 +503,6 @@
 										editHandler={() => {
 											goto(`/admin/functions/edit?id=${encodeURIComponent(func.id)}`);
 										}}
-										shareHandler={() => {
-											shareHandler(func);
-										}}
 										cloneHandler={() => {
 											cloneHandler(func);
 										}}
@@ -601,33 +570,6 @@
 		'Admins have access to all tools at all times; users need tools assigned per model in the workspace.'
 	)}
 </div> -->
-
-		{#if $config?.features.enable_community_sharing}
-			<div class=" my-16">
-				<div class=" text-xl font-medium mb-1 line-clamp-1">
-					{$i18n.t('Made by Open WebUI Community')}
-				</div>
-
-				<a
-					class=" flex cursor-pointer items-center justify-between hover:bg-gray-50 dark:hover:bg-gray-850 w-full mb-2 px-3.5 py-1.5 rounded-xl transition"
-					href="https://openwebui.com/functions"
-					target="_blank"
-				>
-					<div class=" self-center">
-						<div class=" font-semibold line-clamp-1">{$i18n.t('Discover a function')}</div>
-						<div class=" text-sm line-clamp-1">
-							{$i18n.t('Discover, download, and explore custom functions')}
-						</div>
-					</div>
-
-					<div>
-						<div>
-							<ChevronRight />
-						</div>
-					</div>
-				</a>
-			</div>
-		{/if}
 	</div>
 
 	<DeleteConfirmDialog
@@ -670,7 +612,7 @@
 
 				for (let func of _functions) {
 					if ('function' in func) {
-						// Required for Community JSON import
+						// Support legacy wrapped function exports
 						func = func.function;
 					}
 

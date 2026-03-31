@@ -50,6 +50,7 @@ Backend Python files modified to return clear error messages if local ML feature
 Additional slim-only removals in this fork:
 
 - Ollama support has been fully removed from backend routing, frontend settings/model management, Docker/Compose helpers, and related documentation/config. This fork is now strictly external-provider / OpenAI-compatible API based.
+- **Community Sharing** — Removed chat stats export, community sync modal, admin toggle, and all frontend actions that published content to `openwebui.com`.
 - **Code Execution / Code Interpreter** — Fully removed. This eliminates:
   - Pyodide WASM Python runtime and 50 pre-bundled scientific packages (~61 MB of static assets)
   - Jupyter remote kernel integration (backend `code_interpreter.py`, WebSocket client)

@@ -98,9 +98,6 @@
 
 	let showRefresh = false;
 
-	let showSyncStatsModal = false;
-	let syncStatsEventData = null;
-
 	let heartbeatInterval = null;
 
 	const BREAKPOINT = 768;
@@ -595,24 +592,7 @@
 		}
 	};
 
-	const windowMessageEventHandler = async (event) => {
-		if (
-			!['https://openwebui.com', 'https://www.openwebui.com', 'http://localhost:9999'].includes(
-				event.origin
-			)
-		) {
-			return;
-		}
-
-		if (event.data === 'export:stats' || event.data?.type === 'export:stats') {
-			syncStatsEventData = event.data;
-			showSyncStatsModal = true;
-		}
-	};
-
 	onMount(async () => {
-		window.addEventListener('message', windowMessageEventHandler);
-
 		let touchstartY = 0;
 
 		function isNavOrDescendant(el) {
@@ -845,18 +825,8 @@
 			loaded = true;
 		}
 
-		// Auto-show SyncStatsModal when opened with ?sync=true (from community)
-		if (
-			(window.opener ?? false) &&
-			$page.url.searchParams.get('sync') === 'true' &&
-			($config?.features?.enable_community_sharing ?? false)
-		) {
-			showSyncStatsModal = true;
-		}
-
 		return () => {
 			window.removeEventListener('resize', onResize);
-			window.removeEventListener('message', windowMessageEventHandler);
 			document.removeEventListener('touchstart', touchstartHandler);
 			document.removeEventListener('touchmove', touchmoveHandler);
 			document.removeEventListener('touchend', touchendHandler);
@@ -902,12 +872,6 @@
 	{:else}
 		<slot />
 	{/if}
-{/if}
-
-{#if $config?.features.enable_community_sharing && showSyncStatsModal}
-	{#await import('$lib/components/chat/Settings/SyncStatsModal.svelte') then { default: SyncStatsModal }}
-		<SyncStatsModal bind:show={showSyncStatsModal} eventData={syncStatsEventData} />
-	{/await}
 {/if}
 
 <Toaster

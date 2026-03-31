@@ -4,7 +4,6 @@
 	import Dropdown from '$lib/components/common/Dropdown.svelte';
 	import GarbageBin from '$lib/components/icons/GarbageBin.svelte';
 	import Tooltip from '$lib/components/common/Tooltip.svelte';
-	import Share from '$lib/components/icons/Share.svelte';
 	import DocumentDuplicate from '$lib/components/icons/DocumentDuplicate.svelte';
 	import Download from '$lib/components/icons/Download.svelte';
 	import Switch from '$lib/components/common/Switch.svelte';
@@ -15,7 +14,6 @@
 	export let func;
 
 	export let editHandler: Function;
-	export let shareHandler: Function;
 	export let cloneHandler: Function;
 	export let exportHandler: Function;
 	export let deleteHandler: Function;
@@ -81,16 +79,6 @@
 				</svg>
 
 				<div class="flex items-center">{$i18n.t('Edit')}</div>
-			</button>
-
-			<button
-				class="select-none flex gap-2 items-center px-3 py-1.5 text-sm font-medium cursor-pointer hover:bg-gray-50 dark:hover:bg-gray-800 rounded-md w-full"
-				on:click={() => {
-					shareHandler();
-				}}
-			>
-				<Share />
-				<div class="flex items-center">{$i18n.t('Share')}</div>
 			</button>
 
 			<button
