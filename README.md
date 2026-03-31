@@ -44,7 +44,6 @@ Backend Python files modified to return clear error messages if local ML feature
 - `backend/open_webui/__init__.py` — Removed CUDA LD_LIBRARY_PATH setup and torch validation
 - `backend/open_webui/routers/retrieval.py` — Local embedding (`get_ef`) and local reranking (`get_rf`) raise errors directing users to external engines; removed `torch.cuda.empty_cache()` calls
 - `backend/open_webui/routers/audio.py` — `set_faster_whisper_model()` returns None with warning; `load_speech_pipeline()` raises NotImplementedError; transformers TTS endpoint returns 501
-- `backend/open_webui/routers/evaluations.py` — `_get_embedding_model()` returns None with warning (query-weighted leaderboard filtering disabled)
 - `backend/open_webui/retrieval/utils.py` — Replaced `sentence_transformers.util.cos_sim` with numpy-based cosine similarity
 
 Additional slim-only removals in this fork:
@@ -60,6 +59,7 @@ Additional slim-only removals in this fork:
   - `RestrictedPython` pip package
   - Run button on Python code blocks, Pyodide file browser, model `code_interpreter` capability
   - Python code formatting (`/code/format` endpoint) is kept and now available to all authenticated users
+- **Ratings / Evaluations / Arena Models** — Removed the feedback database model and evaluations API/admin UI, the thumbs up/down response rating flow, and the anonymous arena-model wrapper system.
 
 ### Database performance optimizations
 

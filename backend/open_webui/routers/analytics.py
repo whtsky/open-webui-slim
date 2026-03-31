@@ -9,7 +9,6 @@ from open_webui.models.chat_messages import ChatMessages, ChatMessageModel
 from open_webui.models.chats import Chats
 from open_webui.models.groups import Groups
 from open_webui.models.users import Users
-from open_webui.models.feedbacks import Feedbacks
 from open_webui.utils.auth import get_admin_user
 from open_webui.internal.db import get_session
 from sqlalchemy.orm import Session
@@ -371,31 +370,13 @@ async def get_model_overview(
         db=db,
     )
 
-    # Get feedback history per day
-    history_counts: dict[str, dict] = defaultdict(lambda: {'won': 0, 'lost': 0})
+    # Feedback history removed (evaluations feature removed)
+    history_counts: dict[str, dict] = {}
 
-    # Calculate start date for history
     now = datetime.now()
     start_dt = None
     if days > 0:
         start_dt = now - timedelta(days=days)
-
-    for chat_id in chat_ids:
-        feedbacks = Feedbacks.get_feedbacks_by_chat_id(chat_id, db=db)
-        for fb in feedbacks:
-            if fb.data and 'rating' in fb.data:
-                rating = fb.data['rating']
-                fb_date = datetime.fromtimestamp(fb.created_at)
-
-                # Filter by date range
-                if start_dt and fb_date < start_dt:
-                    continue
-
-                date_str = fb_date.strftime('%Y-%m-%d')
-                if rating == 1:
-                    history_counts[date_str]['won'] += 1
-                elif rating == -1:
-                    history_counts[date_str]['lost'] += 1
 
     # Fill in missing days
     history = []

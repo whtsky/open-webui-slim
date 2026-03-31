@@ -266,7 +266,7 @@
 
 			if (model.base_model_id) {
 				const base_model = $models
-					.filter((m) => !m?.preset && !(m?.arena ?? false))
+					.filter((m) => !m?.preset)
 					.find((m) => [model.base_model_id, `${model.base_model_id}:latest`].includes(m.id));
 
 				console.log('base_model', base_model);
@@ -603,7 +603,7 @@
 											<option value={null} class=" text-gray-900"
 												>{$i18n.t('Select a base model')}</option
 											>
-											{#each $models.filter((m) => (model ? m.id !== model.id : true) && !m?.preset && m?.owned_by !== 'arena' && !(m?.direct ?? false)) as model}
+											{#each $models.filter((m) => (model ? m.id !== model.id : true) && !m?.preset && !(m?.direct ?? false)) as model}
 												<option value={model.id} class=" text-gray-900">{model.name}</option>
 											{/each}
 										</select>

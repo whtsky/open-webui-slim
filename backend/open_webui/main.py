@@ -89,7 +89,6 @@ from open_webui.routers import (
     models,
     knowledge,
     prompts,
-    evaluations,
     skills,
     tools,
     users,
@@ -359,9 +358,7 @@ from open_webui.config import (
     ENABLE_CHANNELS,
     ENABLE_NOTES,
     ENABLE_USER_STATUS,
-    ENABLE_MESSAGE_RATING,
     ENABLE_USER_WEBHOOKS,
-    ENABLE_EVALUATION_ARENA_MODELS,
     BYPASS_ADMIN_ACCESS_CONTROL,
     USER_PERMISSIONS,
     DEFAULT_USER_ROLE,
@@ -371,11 +368,9 @@ from open_webui.config import (
     DEFAULT_PROMPT_SUGGESTIONS,
     DEFAULT_MODELS,
     DEFAULT_PINNED_MODELS,
-    DEFAULT_ARENA_MODEL,
     MODEL_ORDER_LIST,
     DEFAULT_MODEL_METADATA,
     DEFAULT_MODEL_PARAMS,
-    EVALUATION_ARENA_MODELS,
     # WebUI (OAuth)
     ENABLE_OAUTH_ROLE_MANAGEMENT,
     OAUTH_SUB_CLAIM,
@@ -829,12 +824,8 @@ app.state.config.ENABLE_FOLDERS = ENABLE_FOLDERS
 app.state.config.FOLDER_MAX_FILE_COUNT = FOLDER_MAX_FILE_COUNT
 app.state.config.ENABLE_CHANNELS = ENABLE_CHANNELS
 app.state.config.ENABLE_NOTES = ENABLE_NOTES
-app.state.config.ENABLE_MESSAGE_RATING = ENABLE_MESSAGE_RATING
 app.state.config.ENABLE_USER_WEBHOOKS = ENABLE_USER_WEBHOOKS
 app.state.config.ENABLE_USER_STATUS = ENABLE_USER_STATUS
-
-app.state.config.ENABLE_EVALUATION_ARENA_MODELS = ENABLE_EVALUATION_ARENA_MODELS
-app.state.config.EVALUATION_ARENA_MODELS = EVALUATION_ARENA_MODELS
 
 # Migrate legacy access_control → access_grants on boot
 from open_webui.utils.access_control import migrate_access_control
@@ -844,12 +835,6 @@ if any('access_control' in c.get('config', {}) for c in connections):
     for connection in connections:
         migrate_access_control(connection.get('config', {}))
     app.state.config.TOOL_SERVER_CONNECTIONS = connections
-
-arena_models = app.state.config.EVALUATION_ARENA_MODELS
-if any('access_control' in m.get('meta', {}) for m in arena_models):
-    for model in arena_models:
-        migrate_access_control(model.get('meta', {}))
-    app.state.config.EVALUATION_ARENA_MODELS = arena_models
 
 app.state.config.OAUTH_SUB_CLAIM = OAUTH_SUB_CLAIM
 app.state.config.OAUTH_USERNAME_CLAIM = OAUTH_USERNAME_CLAIM
@@ -1441,7 +1426,6 @@ app.include_router(folders.router, prefix='/api/v1/folders', tags=['folders'])
 app.include_router(groups.router, prefix='/api/v1/groups', tags=['groups'])
 app.include_router(files.router, prefix='/api/v1/files', tags=['files'])
 app.include_router(functions.router, prefix='/api/v1/functions', tags=['functions'])
-app.include_router(evaluations.router, prefix='/api/v1/evaluations', tags=['evaluations'])
 if ENABLE_ADMIN_ANALYTICS:
     app.include_router(analytics.router, prefix='/api/v1/analytics', tags=['analytics'])
 app.include_router(utils.router, prefix='/api/v1/utils', tags=['utils'])
@@ -1539,7 +1523,7 @@ async def embeddings(request: Request, form_data: dict, user=Depends(get_verifie
 
         This handler:
           - Performs user/model checks and dispatches to the correct backend.
-          - Supports OpenAI-compatible, arena, pipeline, and other compatible providers.
+          - Supports OpenAI-compatible, pipeline, and other compatible providers.
 
     Args:
         request (Request): Request context.
@@ -1990,7 +1974,6 @@ async def get_app_config(request: Request):
                     'enable_web_search': app.state.config.ENABLE_WEB_SEARCH,
                     'enable_image_generation': app.state.config.ENABLE_IMAGE_GENERATION,
                     'enable_autocomplete_generation': app.state.config.ENABLE_AUTOCOMPLETE_GENERATION,
-                    'enable_message_rating': app.state.config.ENABLE_MESSAGE_RATING,
                     'enable_user_webhooks': app.state.config.ENABLE_USER_WEBHOOKS,
                     'enable_user_status': app.state.config.ENABLE_USER_STATUS,
                     'enable_admin_export': ENABLE_ADMIN_EXPORT,

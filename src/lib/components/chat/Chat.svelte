@@ -1645,7 +1645,6 @@
 
 		if (selected_model_id) {
 			message.selectedModelId = selected_model_id;
-			message.arena = true;
 		}
 
 		if (usage) {

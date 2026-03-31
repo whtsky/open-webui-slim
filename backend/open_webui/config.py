@@ -1462,27 +1462,6 @@ ENABLE_USER_STATUS = PersistentConfig(
     os.environ.get('ENABLE_USER_STATUS', 'True').lower() == 'true',
 )
 
-ENABLE_EVALUATION_ARENA_MODELS = PersistentConfig(
-    'ENABLE_EVALUATION_ARENA_MODELS',
-    'evaluation.arena.enable',
-    os.environ.get('ENABLE_EVALUATION_ARENA_MODELS', 'True').lower() == 'true',
-)
-EVALUATION_ARENA_MODELS = PersistentConfig(
-    'EVALUATION_ARENA_MODELS',
-    'evaluation.arena.models',
-    [],
-)
-
-DEFAULT_ARENA_MODEL = {
-    'id': 'arena-model',
-    'name': 'Arena Model',
-    'meta': {
-        'profile_image_url': '/favicon.png',
-        'description': 'Submit your questions to anonymous AI chatbots and vote on the best response.',
-        'model_ids': None,
-    },
-}
-
 WEBHOOK_URL = PersistentConfig('WEBHOOK_URL', 'webhook_url', os.environ.get('WEBHOOK_URL', ''))
 
 ENABLE_ADMIN_EXPORT = os.environ.get('ENABLE_ADMIN_EXPORT', 'True').lower() == 'true'
@@ -1502,12 +1481,6 @@ BYPASS_ADMIN_ACCESS_CONTROL = (
 ENABLE_ADMIN_CHAT_ACCESS = os.environ.get('ENABLE_ADMIN_CHAT_ACCESS', 'True').lower() == 'true'
 
 ENABLE_ADMIN_ANALYTICS = os.environ.get('ENABLE_ADMIN_ANALYTICS', 'True').lower() == 'true'
-
-ENABLE_MESSAGE_RATING = PersistentConfig(
-    'ENABLE_MESSAGE_RATING',
-    'ui.enable_message_rating',
-    os.environ.get('ENABLE_MESSAGE_RATING', 'True').lower() == 'true',
-)
 
 ENABLE_USER_WEBHOOKS = PersistentConfig(
     'ENABLE_USER_WEBHOOKS',
