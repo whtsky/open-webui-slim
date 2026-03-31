@@ -290,6 +290,59 @@ class ChatMessageTable:
             db.commit()
             return True
 
+    def get_messages_map_by_chat_id(self, chat_id: str, db: Optional[Session] = None) -> Optional[dict]:
+        """
+        Return all messages for a chat as a dict keyed by message_id (not
+        composite ID).  Values use **camelCase** field names so the result
+        is directly compatible with ``get_message_list()`` in misc.py which
+        expects ``parentId``, ``model``, ``statusHistory``, etc.
+
+        Returns None if no rows exist (caller should fall back to JSON blob).
+        """
+        with get_db_context(db) as db:
+            rows = db.query(ChatMessage).filter_by(chat_id=chat_id).all()
+            if not rows:
+                return None
+
+            messages_map: dict[str, dict] = {}
+            for row in rows:
+                # Extract the original message_id from the composite id
+                # Composite format: "{chat_id}-{message_id}"
+                msg_id = row.id[len(chat_id) + 1 :]
+
+                msg: dict = {
+                    'id': msg_id,
+                    'role': row.role,
+                    'content': row.content if row.content is not None else '',
+                    'parentId': row.parent_id,
+                }
+
+                # Optional fields — only include if present
+                if row.model_id is not None:
+                    msg['model'] = row.model_id
+                if row.output is not None:
+                    msg['output'] = row.output
+                if row.files is not None:
+                    msg['files'] = row.files
+                if row.sources is not None:
+                    msg['sources'] = row.sources
+                if row.embeds is not None:
+                    msg['embeds'] = row.embeds
+                if row.done is not None:
+                    msg['done'] = row.done
+                if row.status_history is not None:
+                    msg['statusHistory'] = row.status_history
+                if row.error is not None:
+                    msg['error'] = row.error
+                if row.usage is not None:
+                    msg['usage'] = row.usage
+                if row.created_at is not None:
+                    msg['timestamp'] = row.created_at
+
+                messages_map[msg_id] = msg
+
+            return messages_map
+
     # Analytics methods
     def get_message_count_by_model(
         self,

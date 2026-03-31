@@ -619,17 +619,21 @@ def search_user_chats(
 ############################
 
 
-@router.get('/folder/{folder_id}', response_model=list[ChatResponse])
-async def get_chats_by_folder_id(folder_id: str, user=Depends(get_verified_user), db: Session = Depends(get_session)):
+@router.get('/folder/{folder_id}', response_model=list[ChatTitleIdResponse])
+async def get_chats_by_folder_id(
+    folder_id: str,
+    page: Optional[int] = 1,
+    limit: Optional[int] = 50,
+    user=Depends(get_verified_user),
+    db: Session = Depends(get_session),
+):
     folder_ids = [folder_id]
     children_folders = Folders.get_children_folders_by_id_and_user_id(folder_id, user.id, db=db)
     if children_folders:
         folder_ids.extend([folder.id for folder in children_folders])
 
-    return [
-        ChatResponse(**chat.model_dump())
-        for chat in Chats.get_chats_by_folder_ids_and_user_id(folder_ids, user.id, db=db)
-    ]
+    skip = (page - 1) * limit
+    return Chats.get_chats_by_folder_ids_and_user_id(folder_ids, user.id, skip=skip, limit=limit, db=db)
 
 
 @router.get('/folder/{folder_id}/list')
@@ -679,9 +683,15 @@ async def get_user_chats(user=Depends(get_verified_user), db: Session = Depends(
 ############################
 
 
-@router.get('/all/archived', response_model=list[ChatResponse])
-async def get_user_archived_chats(user=Depends(get_verified_user), db: Session = Depends(get_session)):
-    return [ChatResponse(**chat.model_dump()) for chat in Chats.get_archived_chats_by_user_id(user.id, db=db)]
+@router.get('/all/archived', response_model=list[ChatTitleIdResponse])
+async def get_user_archived_chats(
+    page: Optional[int] = 1,
+    limit: Optional[int] = 60,
+    user=Depends(get_verified_user),
+    db: Session = Depends(get_session),
+):
+    skip = (page - 1) * limit
+    return Chats.get_archived_chats_by_user_id(user.id, skip=skip, limit=limit, db=db)
 
 
 ############################

@@ -60,6 +60,16 @@ Additional slim-only removals in this fork:
   - Run button on Python code blocks, Pyodide file browser, model `code_interpreter` capability
   - Python code formatting (`/code/format` endpoint) is kept and now available to all authenticated users
 
+### Database performance optimizations
+
+The upstream chat subsystem has several query patterns that cause excessive memory usage and can trigger OOM on large instances ([open-webui/open-webui#23192](https://github.com/open-webui/open-webui/issues/23192)). This fork fixes them:
+
+- **`_sanitize_chat_row()` moved to write paths only** — upstream calls this recursive null-byte cleaner on every `get_chat_by_id()` read, which can trigger unexpected DB commits. Now runs only during `insert_new_chat()`, `update_chat_by_id()`, and `import_chats()`.
+- **Column projection on 5 list queries** — `get_chat_list_by_user_id()`, `get_chats_by_folder_id_and_user_id()`, `get_chats_by_folder_ids_and_user_id()`, `get_chat_list_by_chat_ids()`, and `get_chat_list_by_user_id_and_tag_name()` now use `.with_entities()` to select only `id, title, updated_at, created_at` instead of loading the full JSON chat blob.
+- **Pagination added** to `/api/v1/chats/all/archived` and `/api/v1/chats/folder/{id}` endpoints (previously unbounded).
+- **Status history dual-write fix** — `add_message_status_to_chat_by_id_and_message_id()` now writes to both the JSON blob and the `chat_message` table, closing a data consistency gap.
+- **Message reads migrated to `chat_message` table** — `get_messages_map_by_chat_id()` and `get_message_by_id_and_message_id()` now read from the normalized `chat_message` table first (with chain integrity validation), falling back to the JSON blob only when necessary. This avoids loading the full chat JSON for every message access in middleware and WebSocket handlers.
+
 ## What's Kept
 
 Everything else from upstream Open WebUI v0.8.12:
@@ -75,6 +85,7 @@ Everything else from upstream Open WebUI v0.8.12:
 - Pipelines plugin support
 - All database backends (SQLite, PostgreSQL)
 - All vector database backends (ChromaDB, PGVector, Qdrant, Milvus, Elasticsearch, etc.)
+- Optimized chat database queries (column projection, pagination, normalized message reads)
 - STT via external providers (OpenAI, Deepgram, Azure, Mistral)
 - TTS via external providers (OpenAI, ElevenLabs, Azure)
 - Progressive Web App
