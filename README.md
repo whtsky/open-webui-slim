@@ -47,9 +47,18 @@ Backend Python files modified to return clear error messages if local ML feature
 - `backend/open_webui/routers/evaluations.py` — `_get_embedding_model()` returns None with warning (query-weighted leaderboard filtering disabled)
 - `backend/open_webui/retrieval/utils.py` — Replaced `sentence_transformers.util.cos_sim` with numpy-based cosine similarity
 
-Additional slim-only removal in this fork:
+Additional slim-only removals in this fork:
 
 - Ollama support has been fully removed from backend routing, frontend settings/model management, Docker/Compose helpers, and related documentation/config. This fork is now strictly external-provider / OpenAI-compatible API based.
+- **Code Execution / Code Interpreter** — Fully removed. This eliminates:
+  - Pyodide WASM Python runtime and 50 pre-bundled scientific packages (~61 MB of static assets)
+  - Jupyter remote kernel integration (backend `code_interpreter.py`, WebSocket client)
+  - Code Interpreter chat feature (prompt injection, streaming tag detection, execution result rendering)
+  - Admin settings panel for code execution configuration (17 environment variables removed)
+  - `pyodide` and `@pyscript/core` npm packages (~19 MB)
+  - `RestrictedPython` pip package
+  - Run button on Python code blocks, Pyodide file browser, model `code_interpreter` capability
+  - Python code formatting (`/code/format` endpoint) is kept and now available to all authenticated users
 
 ## What's Kept
 

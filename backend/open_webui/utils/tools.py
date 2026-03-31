@@ -58,7 +58,6 @@ from open_webui.tools.builtin import (
     fetch_url,
     generate_image,
     edit_image,
-    execute_code,
     search_memories,
     add_memory,
     replace_memory_content,
@@ -474,15 +473,6 @@ def get_builtin_tools(
         and features.get('image_generation')
     ):
         builtin_functions.append(edit_image)
-
-    # Add code interpreter tool if builtin category enabled AND enabled globally AND model has code_interpreter capability
-    if (
-        is_builtin_tool_enabled('code_interpreter')
-        and getattr(request.app.state.config, 'ENABLE_CODE_INTERPRETER', True)
-        and get_model_capability('code_interpreter')
-        and features.get('code_interpreter')
-    ):
-        builtin_functions.append(execute_code)
 
     # Notes tools - search, view, create, and update user's notes (if builtin category enabled AND notes enabled globally)
     if is_builtin_tool_enabled('notes') and getattr(request.app.state.config, 'ENABLE_NOTES', False):

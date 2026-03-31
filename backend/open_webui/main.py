@@ -130,22 +130,6 @@ from open_webui.config import (
     TOOL_SERVER_CONNECTIONS,
     # Terminal Server
     TERMINAL_SERVER_CONNECTIONS,
-    # Code Execution
-    ENABLE_CODE_EXECUTION,
-    CODE_EXECUTION_ENGINE,
-    CODE_EXECUTION_JUPYTER_URL,
-    CODE_EXECUTION_JUPYTER_AUTH,
-    CODE_EXECUTION_JUPYTER_AUTH_TOKEN,
-    CODE_EXECUTION_JUPYTER_AUTH_PASSWORD,
-    CODE_EXECUTION_JUPYTER_TIMEOUT,
-    ENABLE_CODE_INTERPRETER,
-    CODE_INTERPRETER_ENGINE,
-    CODE_INTERPRETER_PROMPT_TEMPLATE,
-    CODE_INTERPRETER_JUPYTER_URL,
-    CODE_INTERPRETER_JUPYTER_AUTH,
-    CODE_INTERPRETER_JUPYTER_AUTH_TOKEN,
-    CODE_INTERPRETER_JUPYTER_AUTH_PASSWORD,
-    CODE_INTERPRETER_JUPYTER_TIMEOUT,
     ENABLE_MEMORIES,
     # Image
     AUTOMATIC1111_API_AUTH,
@@ -1130,30 +1114,6 @@ app.state.RERANKING_FUNCTION = get_reranking_function(
 
 ########################################
 #
-# CODE EXECUTION
-#
-########################################
-
-app.state.config.ENABLE_CODE_EXECUTION = ENABLE_CODE_EXECUTION
-app.state.config.CODE_EXECUTION_ENGINE = CODE_EXECUTION_ENGINE
-app.state.config.CODE_EXECUTION_JUPYTER_URL = CODE_EXECUTION_JUPYTER_URL
-app.state.config.CODE_EXECUTION_JUPYTER_AUTH = CODE_EXECUTION_JUPYTER_AUTH
-app.state.config.CODE_EXECUTION_JUPYTER_AUTH_TOKEN = CODE_EXECUTION_JUPYTER_AUTH_TOKEN
-app.state.config.CODE_EXECUTION_JUPYTER_AUTH_PASSWORD = CODE_EXECUTION_JUPYTER_AUTH_PASSWORD
-app.state.config.CODE_EXECUTION_JUPYTER_TIMEOUT = CODE_EXECUTION_JUPYTER_TIMEOUT
-
-app.state.config.ENABLE_CODE_INTERPRETER = ENABLE_CODE_INTERPRETER
-app.state.config.CODE_INTERPRETER_ENGINE = CODE_INTERPRETER_ENGINE
-app.state.config.CODE_INTERPRETER_PROMPT_TEMPLATE = CODE_INTERPRETER_PROMPT_TEMPLATE
-
-app.state.config.CODE_INTERPRETER_JUPYTER_URL = CODE_INTERPRETER_JUPYTER_URL
-app.state.config.CODE_INTERPRETER_JUPYTER_AUTH = CODE_INTERPRETER_JUPYTER_AUTH
-app.state.config.CODE_INTERPRETER_JUPYTER_AUTH_TOKEN = CODE_INTERPRETER_JUPYTER_AUTH_TOKEN
-app.state.config.CODE_INTERPRETER_JUPYTER_AUTH_PASSWORD = CODE_INTERPRETER_JUPYTER_AUTH_PASSWORD
-app.state.config.CODE_INTERPRETER_JUPYTER_TIMEOUT = CODE_INTERPRETER_JUPYTER_TIMEOUT
-
-########################################
-#
 # IMAGES
 #
 ########################################
@@ -2030,8 +1990,6 @@ async def get_app_config(request: Request):
                     'enable_channels': app.state.config.ENABLE_CHANNELS,
                     'enable_notes': app.state.config.ENABLE_NOTES,
                     'enable_web_search': app.state.config.ENABLE_WEB_SEARCH,
-                    'enable_code_execution': app.state.config.ENABLE_CODE_EXECUTION,
-                    'enable_code_interpreter': app.state.config.ENABLE_CODE_INTERPRETER,
                     'enable_image_generation': app.state.config.ENABLE_IMAGE_GENERATION,
                     'enable_autocomplete_generation': app.state.config.ENABLE_AUTOCOMPLETE_GENERATION,
                     'enable_community_sharing': app.state.config.ENABLE_COMMUNITY_SHARING,
@@ -2063,10 +2021,7 @@ async def get_app_config(request: Request):
                 'default_pinned_models': app.state.config.DEFAULT_PINNED_MODELS,
                 'default_prompt_suggestions': app.state.config.DEFAULT_PROMPT_SUGGESTIONS,
                 'user_count': user_count,
-                'code': {
-                    'engine': app.state.config.CODE_EXECUTION_ENGINE,
-                    'interpreter_engine': app.state.config.CODE_INTERPRETER_ENGINE,
-                },
+                'code': {},
                 'audio': {
                     'tts': {
                         'engine': app.state.config.TTS_ENGINE,

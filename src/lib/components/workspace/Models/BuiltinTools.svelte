@@ -38,10 +38,6 @@
 		image_generation: {
 			label: $i18n.t('Image Generation'),
 			description: $i18n.t('Generate and edit images')
-		},
-		code_interpreter: {
-			label: $i18n.t('Code Interpreter'),
-			description: $i18n.t('Execute code')
 		}
 	};
 

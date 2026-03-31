@@ -230,7 +230,6 @@ class FeaturesPermissions(BaseModel):
 
     web_search: bool = True
     image_generation: bool = True
-    code_interpreter: bool = True
     memories: bool = True
 
 

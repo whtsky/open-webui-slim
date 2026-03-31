@@ -105,12 +105,6 @@
 						{:else}
 							{$i18n.t('Thinking...')}
 						{/if}
-					{:else if attributes?.type === 'code_interpreter'}
-						{#if attributes?.done === 'true' || messageDone}
-							{$i18n.t('Analyzed')}
-						{:else}
-							{$i18n.t('Analyzing...')}
-						{/if}
 					{:else}
 						{title}
 					{/if}

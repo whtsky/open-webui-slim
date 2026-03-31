@@ -316,10 +316,7 @@
 														{@const availableFeatures = Object.entries(defaultCapabilities)
 															.filter(
 																([key, value]) =>
-																	value &&
-																	['web_search', 'code_interpreter', 'image_generation'].includes(
-																		key
-																	)
+																	value && ['web_search', 'image_generation'].includes(key)
 															)
 															.map(([key, value]) => key)}
 

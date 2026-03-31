@@ -84,7 +84,6 @@
 
 	import InputVariablesModal from './MessageInput/InputVariablesModal.svelte';
 	import Voice from '../icons/Voice.svelte';
-	import Terminal from '../icons/Terminal.svelte';
 	import IntegrationsMenu from './MessageInput/IntegrationsMenu.svelte';
 	import TerminalMenu from './MessageInput/TerminalMenu.svelte';
 	import Component from '../icons/Component.svelte';
@@ -129,7 +128,6 @@
 
 	export let imageGenerationEnabled = false;
 	export let webSearchEnabled = false;
-	export let codeInterpreterEnabled = false;
 
 	export let pendingOAuthTools = [];
 
@@ -170,8 +168,7 @@
 		selectedToolIds,
 		selectedFilterIds,
 		imageGenerationEnabled,
-		webSearchEnabled,
-		codeInterpreterEnabled
+		webSearchEnabled
 	});
 
 	const inputVariableHandler = async (text: string): Promise<string> => {
@@ -477,14 +474,6 @@
 			$models.find((m) => m.id === model)?.info?.meta?.capabilities?.image_generation ?? true
 	);
 
-	let codeInterpreterCapableModels = [];
-	$: codeInterpreterCapableModels = (
-		atSelectedModel?.id ? [atSelectedModel.id] : selectedModels
-	).filter(
-		(model) =>
-			$models.find((m) => m.id === model)?.info?.meta?.capabilities?.code_interpreter ?? true
-	);
-
 	let toggleFilters = [];
 	$: toggleFilters = (atSelectedModel?.id ? [atSelectedModel.id] : selectedModels)
 		.map((id) => ($models.find((model) => model.id === id) || {})?.filters ?? [])
@@ -506,19 +495,6 @@
 			imageGenerationCapableModels.length &&
 		$config?.features?.enable_image_generation &&
 		($_user.role === 'admin' || $_user?.permissions?.features?.image_generation);
-
-	let showCodeInterpreterButton = false;
-	$: showCodeInterpreterButton =
-		!$selectedTerminalId &&
-		(atSelectedModel?.id ? [atSelectedModel.id] : selectedModels).length ===
-			codeInterpreterCapableModels.length &&
-		$config?.features?.enable_code_interpreter &&
-		($_user.role === 'admin' || $_user?.permissions?.features?.code_interpreter);
-
-	// Disable code interpreter when terminal is active (mutually exclusive)
-	$: if ($selectedTerminalId && codeInterpreterEnabled) {
-		codeInterpreterEnabled = false;
-	}
 
 	const scrollToBottom = () => {
 		const element = document.getElementById('messages-container');
@@ -1514,7 +1490,6 @@
 
 															webSearchEnabled = false;
 															imageGenerationEnabled = false;
-															codeInterpreterEnabled = false;
 														}
 													}}
 													on:paste={async (e) => {
@@ -1622,7 +1597,7 @@
 										</div>
 									</InputMenu>
 
-									{#if showWebSearchButton || showImageGenerationButton || showCodeInterpreterButton || showToolsButton || (toggleFilters && toggleFilters.length > 0)}
+									{#if showWebSearchButton || showImageGenerationButton || showToolsButton || (toggleFilters && toggleFilters.length > 0)}
 										<div
 											class="flex self-center w-[1px] h-4 mx-1 bg-gray-200/50 dark:bg-gray-800/50"
 										/>
@@ -1632,12 +1607,10 @@
 											{toggleFilters}
 											{showWebSearchButton}
 											{showImageGenerationButton}
-											{showCodeInterpreterButton}
 											bind:selectedToolIds
 											bind:selectedFilterIds
 											bind:webSearchEnabled
 											bind:imageGenerationEnabled
-											bind:codeInterpreterEnabled
 											closeOnOutsideClick={integrationsMenuCloseOnOutsideClick}
 											onShowValves={(e) => {
 												const { type, id } = e;
@@ -1771,32 +1744,6 @@
 														: 'bg-transparent text-gray-600 dark:text-gray-300 hover:bg-gray-50 dark:hover:bg-gray-800 '}"
 												>
 													<Photo className="size-4" strokeWidth="1.75" />
-													<div class="hidden group-hover:block">
-														<XMark className="size-4" strokeWidth="1.75" />
-													</div>
-												</button>
-											</Tooltip>
-										{/if}
-
-										{#if codeInterpreterEnabled}
-											<Tooltip content={$i18n.t('Code Interpreter')} placement="top">
-												<button
-													aria-label={codeInterpreterEnabled
-														? $i18n.t('Disable Code Interpreter')
-														: $i18n.t('Enable Code Interpreter')}
-													aria-pressed={codeInterpreterEnabled}
-													on:click|preventDefault={() =>
-														(codeInterpreterEnabled = !codeInterpreterEnabled)}
-													type="button"
-													class=" group p-[7px] flex gap-1.5 items-center text-sm transition-colors duration-300 max-w-full overflow-hidden {codeInterpreterEnabled
-														? ' text-sky-500 dark:text-sky-300 bg-sky-50 hover:bg-sky-100 dark:bg-sky-400/10 dark:hover:bg-sky-700/10 border border-sky-200/40 dark:border-sky-500/20'
-														: 'bg-transparent text-gray-600 dark:text-gray-300 hover:bg-gray-50 dark:hover:bg-gray-800 '} {($settings?.highContrastMode ??
-													false)
-														? 'm-1'
-														: 'focus:outline-hidden rounded-full'}"
-												>
-													<Terminal className="size-3.5" strokeWidth="2" />
-
 													<div class="hidden group-hover:block">
 														<XMark className="size-4" strokeWidth="1.75" />
 													</div>

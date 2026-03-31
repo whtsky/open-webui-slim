@@ -4,7 +4,6 @@ import logging
 import sys
 import os
 import base64
-import textwrap
 
 import asyncio
 from aiocache import cached
@@ -74,7 +73,6 @@ from open_webui.models.models import Models
 from open_webui.retrieval.utils import get_sources_from_items
 
 
-from open_webui.utils.sanitize import sanitize_code
 from open_webui.utils.chat import generate_chat_completion
 from open_webui.utils.task import (
     get_task_model_id,
@@ -111,7 +109,6 @@ from open_webui.utils.filter import (
     get_sorted_filter_ids,
     process_filter_functions,
 )
-from open_webui.utils.code_interpreter import execute_code_jupyter
 from open_webui.utils.payload import apply_system_prompt_to_body
 from open_webui.utils.response import normalize_usage
 from open_webui.utils.mcp.client import MCPClient
@@ -121,9 +118,6 @@ from open_webui.config import (
     CACHE_DIR,
     DEFAULT_VOICE_MODE_PROMPT_TEMPLATE,
     DEFAULT_TOOLS_FUNCTION_CALLING_PROMPT_TEMPLATE,
-    DEFAULT_CODE_INTERPRETER_PROMPT,
-    CODE_INTERPRETER_PYODIDE_PROMPT,
-    CODE_INTERPRETER_BLOCKED_MODULES,
 )
 from open_webui.env import (
     GLOBAL_LOG_LEVEL,
@@ -161,7 +155,6 @@ DEFAULT_REASONING_TAGS = [
     ('◁think▷', '◁/think▷'),
 ]
 DEFAULT_SOLUTION_TAGS = [('<|begin_of_solution|>', '<|end_of_solution|>')]
-DEFAULT_CODE_INTERPRETER_TAGS = [('<code_interpreter>', '</code_interpreter>')]
 
 
 def output_id(prefix: str) -> str:
@@ -389,18 +382,6 @@ def get_citation_source_from_tool_result(
         ]
 
 
-def split_content_and_whitespace(content):
-    content_stripped = content.rstrip()
-    original_whitespace = content[len(content_stripped) :] if len(content) > len(content_stripped) else ''
-    return content_stripped, original_whitespace
-
-
-def is_opening_code_block(content):
-    backtick_segments = content.split('```')
-    # Even number of segments means the last backticks are opening a new block
-    return len(backtick_segments) > 1 and len(backtick_segments) % 2 == 0
-
-
 def serialize_output(output: list) -> str:
     """
     Convert OR-aligned output items to HTML for display.
@@ -484,44 +465,6 @@ def serialize_output(output: list) -> str:
                 content = f'{content}<details type="reasoning" done="true" duration="{duration or 0}">\n<summary>Thought for {duration or 0} seconds</summary>\n{display}\n</details>\n'
             else:
                 content = f'{content}<details type="reasoning" done="false">\n<summary>Thinking…</summary>\n{display}\n</details>\n'
-
-        elif item_type == 'open_webui:code_interpreter':
-            content_stripped, original_whitespace = split_content_and_whitespace(content)
-            if is_opening_code_block(content_stripped):
-                content = content_stripped.rstrip('`').rstrip() + original_whitespace
-            else:
-                content = content_stripped + original_whitespace
-
-            if content and not content.endswith('\n'):
-                content += '\n'
-
-            # Render the code_interpreter item as a <details> block
-            # so the frontend Collapsible renders "Analyzing..."/"Analyzed".
-            code = item.get('code', '').strip()
-            lang = item.get('lang', 'python')
-            status = item.get('status', 'in_progress')
-            duration = item.get('duration')
-            is_last_item = idx == len(output) - 1
-
-            # Build inner content: code block
-            display = ''
-            if code:
-                display = f'```{lang}\n{code}\n```'
-
-            # Build output attribute as HTML-escaped JSON for CodeBlock.svelte
-            ci_output = item.get('output')
-            output_attr = ''
-            if ci_output:
-                if isinstance(ci_output, dict):
-                    output_json = json.dumps(ci_output, ensure_ascii=False)
-                else:
-                    output_json = json.dumps({'result': str(ci_output)}, ensure_ascii=False)
-                output_attr = f' output="{html.escape(output_json)}"'
-
-            if status == 'completed' or duration is not None or not is_last_item:
-                content += f'<details type="code_interpreter" done="true" duration="{duration or 0}"{output_attr}>\n<summary>Analyzed</summary>\n{display}\n</details>\n'
-            else:
-                content += f'<details type="code_interpreter" done="false"{output_attr}>\n<summary>Analyzing…</summary>\n{display}\n</details>\n'
 
     return content.strip()
 
@@ -2344,35 +2287,6 @@ async def process_chat_payload(request, form_data, user, metadata, model):
             if metadata.get('params', {}).get('function_calling') != 'native':
                 form_data = await chat_image_generation_handler(request, form_data, extra_params, user)
 
-        if 'code_interpreter' in features and features['code_interpreter']:
-            engine = getattr(request.app.state.config, 'CODE_INTERPRETER_ENGINE', 'pyodide')
-
-            # Skip XML-tag prompt injection when native FC is enabled —
-            # execute_code will be injected as a builtin tool instead
-            if metadata.get('params', {}).get('function_calling') != 'native':
-                prompt = (
-                    request.app.state.config.CODE_INTERPRETER_PROMPT_TEMPLATE
-                    if request.app.state.config.CODE_INTERPRETER_PROMPT_TEMPLATE != ''
-                    else DEFAULT_CODE_INTERPRETER_PROMPT
-                )
-
-                # Append filesystem awareness only for pyodide engine
-                if engine != 'jupyter':
-                    prompt += CODE_INTERPRETER_PYODIDE_PROMPT
-
-                form_data['messages'] = add_or_update_user_message(
-                    prompt,
-                    form_data['messages'],
-                )
-            else:
-                # Native FC: tool docstring can't be dynamic, so inject
-                # filesystem context into messages for pyodide engine
-                if engine != 'jupyter':
-                    form_data['messages'] = add_or_update_user_message(
-                        CODE_INTERPRETER_PYODIDE_PROMPT,
-                        form_data['messages'],
-                    )
-
     tool_ids = form_data.pop('tool_ids', None)
     terminal_id = form_data.pop('terminal_id', None)
     files = form_data.pop('files', None)
@@ -3210,7 +3124,7 @@ async def streaming_chat_response_handler(response, ctx):
         async def response_handler(response, events):
             def tag_output_handler(content_type, tags, output):
                 """
-                Detect special tags (reasoning, solution, code_interpreter) in streaming
+                Detect special tags (reasoning, solution) in streaming
                 content and create corresponding OR-aligned output items directly.
                 Operates on output items instead of content_blocks.
 
@@ -3248,7 +3162,6 @@ async def streaming_chat_response_handler(response, ctx):
                 output_type_map = {
                     'reasoning': 'reasoning',
                     'solution': 'message',  # solution tags just produce text
-                    'code_interpreter': 'open_webui:code_interpreter',
                 }
                 output_item_type = output_type_map.get(content_type, content_type)
 
@@ -3297,21 +3210,6 @@ async def streaming_chat_response_handler(response, ctx):
                                         'started_at': time.time(),
                                     }
                                 )
-                            elif output_item_type == 'open_webui:code_interpreter':
-                                output.append(
-                                    {
-                                        'type': 'open_webui:code_interpreter',
-                                        'id': output_id('ci'),
-                                        'status': 'in_progress',
-                                        'start_tag': start_tag,
-                                        'end_tag': end_tag,
-                                        'attributes': attributes,
-                                        'lang': attributes.get('lang', 'python'),
-                                        'code': '',
-                                        'output': None,
-                                        'started_at': time.time(),
-                                    }
-                                )
                             else:
                                 # solution or other text-producing tag
                                 output.append(
@@ -3333,8 +3231,6 @@ async def streaming_chat_response_handler(response, ctx):
                                 # Set the after_tag content on the new item
                                 if output_item_type == 'reasoning':
                                     output[-1]['content'] = [{'type': 'output_text', 'text': after_tag}]
-                                elif output_item_type == 'open_webui:code_interpreter':
-                                    output[-1]['code'] = after_tag
                                 else:
                                     set_last_text(output, after_tag)
 
@@ -3344,10 +3240,8 @@ async def streaming_chat_response_handler(response, ctx):
 
                             break
 
-                elif (
-                    (last_type == 'reasoning' and content_type == 'reasoning')
-                    or (last_type == 'open_webui:code_interpreter' and content_type == 'code_interpreter')
-                    or (last_type == 'message' and output[-1].get('_tag_type') == content_type)
+                elif (last_type == 'reasoning' and content_type == 'reasoning') or (
+                    last_type == 'message' and output[-1].get('_tag_type') == content_type
                 ):
                     item = output[-1]
                     start_tag = item.get('start_tag', '')
@@ -3361,8 +3255,6 @@ async def streaming_chat_response_handler(response, ctx):
                         block_content = ''
                         if parts and parts[-1].get('type') == 'output_text':
                             block_content = parts[-1].get('text', '')
-                    elif last_type == 'open_webui:code_interpreter':
-                        block_content = item.get('code', '')
                     else:
                         block_content = get_last_text(output)
 
@@ -3388,10 +3280,6 @@ async def streaming_chat_response_handler(response, ctx):
                                 item['ended_at'] = time.time()
                                 item['duration'] = int(item['ended_at'] - item['started_at'])
                                 item['status'] = 'completed'
-                            elif last_type == 'open_webui:code_interpreter':
-                                item['code'] = block_content
-                                item['ended_at'] = time.time()
-                                item['duration'] = int(item['ended_at'] - item['started_at'])
                             else:
                                 set_last_text(output, block_content)
                                 item['ended_at'] = time.time()
@@ -3474,7 +3362,6 @@ async def streaming_chat_response_handler(response, ctx):
 
             reasoning_tags_param = metadata.get('params', {}).get('reasoning_tags')
             DETECT_REASONING_TAGS = reasoning_tags_param is not False
-            DETECT_CODE_INTERPRETER = metadata.get('features', {}).get('code_interpreter', False)
 
             reasoning_tags = []
             if DETECT_REASONING_TAGS:
@@ -3834,7 +3721,7 @@ async def streaming_chat_response_handler(response, ctx):
                                         content = f'{content}{value}'
 
                                         # Check if we're inside a tag-based block
-                                        # (reasoning, code_interpreter, or solution).
+                                        # (reasoning or solution).
                                         # If so, append to the existing in-progress
                                         # item instead of creating a new message —
                                         # otherwise tag_output_handler re-detects the
@@ -3848,7 +3735,6 @@ async def streaming_chat_response_handler(response, ctx):
                                             and last_item.get('attributes', {}).get('type') != 'reasoning_content'
                                             and (
                                                 last_item_type == 'reasoning'
-                                                or last_item_type == 'open_webui:code_interpreter'
                                                 or (
                                                     last_item_type == 'message'
                                                     and last_item.get('_tag_type') is not None
@@ -3858,9 +3744,7 @@ async def streaming_chat_response_handler(response, ctx):
 
                                         if inside_tag_block:
                                             # Append to the existing tag-based item
-                                            if last_item_type == 'open_webui:code_interpreter':
-                                                last_item['code'] = last_item.get('code', '') + value
-                                            elif last_item_type == 'reasoning':
+                                            if last_item_type == 'reasoning':
                                                 parts = last_item.get('content', [])
                                                 if parts and parts[-1].get('type') == 'output_text':
                                                     parts[-1]['text'] += value
@@ -3924,16 +3808,6 @@ async def streaming_chat_response_handler(response, ctx):
                                                 DEFAULT_SOLUTION_TAGS,
                                                 output,
                                             )
-
-                                        if DETECT_CODE_INTERPRETER:
-                                            output, end = tag_output_handler(
-                                                'code_interpreter',
-                                                DEFAULT_CODE_INTERPRETER_TAGS,
-                                                output,
-                                            )
-
-                                            if end:
-                                                break
 
                                         if ENABLE_REALTIME_CHAT_SAVE:
                                             # Save message in the database
@@ -4426,171 +4300,6 @@ async def streaming_chat_response_handler(response, ctx):
                     except Exception as e:
                         log.debug(e)
                         break
-
-                if DETECT_CODE_INTERPRETER:
-                    MAX_RETRIES = 5
-                    retries = 0
-
-                    while output and output[-1].get('type') == 'open_webui:code_interpreter' and retries < MAX_RETRIES:
-                        await event_emitter(
-                            {
-                                'type': 'chat:completion',
-                                'data': {
-                                    'content': serialize_output(output),
-                                    'output': output,
-                                },
-                            }
-                        )
-
-                        retries += 1
-                        log.debug(f'Attempt count: {retries}')
-
-                        ci_item = output[-1]
-                        ci_output = ''
-                        try:
-                            if ci_item.get('attributes', {}).get('type') == 'code':
-                                code = ci_item.get('code', '')
-                                # Sanitize code (strips ANSI codes and markdown fences)
-                                code = sanitize_code(code)
-
-                                if CODE_INTERPRETER_BLOCKED_MODULES:
-                                    blocking_code = textwrap.dedent(
-                                        f"""
-                                        import builtins
-    
-                                        BLOCKED_MODULES = {CODE_INTERPRETER_BLOCKED_MODULES}
-    
-                                        _real_import = builtins.__import__
-                                        def restricted_import(name, globals=None, locals=None, fromlist=(), level=0):
-                                            if name.split('.')[0] in BLOCKED_MODULES:
-                                                importer_name = globals.get('__name__') if globals else None
-                                                if importer_name == '__main__':
-                                                    raise ImportError(
-                                                        f"Direct import of module {{name}} is restricted."
-                                                    )
-                                            return _real_import(name, globals, locals, fromlist, level)
-    
-                                        builtins.__import__ = restricted_import
-                                    """
-                                    )
-                                    code = blocking_code + '\n' + code
-
-                                if request.app.state.config.CODE_INTERPRETER_ENGINE == 'pyodide':
-                                    ci_output = await event_caller(
-                                        {
-                                            'type': 'execute:python',
-                                            'data': {
-                                                'id': str(uuid4()),
-                                                'code': code,
-                                                'session_id': metadata.get('session_id', None),
-                                                'files': metadata.get('files', []),
-                                            },
-                                        }
-                                    )
-                                elif request.app.state.config.CODE_INTERPRETER_ENGINE == 'jupyter':
-                                    ci_output = await execute_code_jupyter(
-                                        request.app.state.config.CODE_INTERPRETER_JUPYTER_URL,
-                                        code,
-                                        (
-                                            request.app.state.config.CODE_INTERPRETER_JUPYTER_AUTH_TOKEN
-                                            if request.app.state.config.CODE_INTERPRETER_JUPYTER_AUTH == 'token'
-                                            else None
-                                        ),
-                                        (
-                                            request.app.state.config.CODE_INTERPRETER_JUPYTER_AUTH_PASSWORD
-                                            if request.app.state.config.CODE_INTERPRETER_JUPYTER_AUTH == 'password'
-                                            else None
-                                        ),
-                                        request.app.state.config.CODE_INTERPRETER_JUPYTER_TIMEOUT,
-                                    )
-                                else:
-                                    ci_output = {'stdout': 'Code interpreter engine not configured.'}
-
-                                log.debug(f'Code interpreter output: {ci_output}')
-
-                                if isinstance(ci_output, dict):
-                                    stdout = ci_output.get('stdout', '')
-
-                                    if isinstance(stdout, str):
-                                        stdoutLines = stdout.split('\n')
-                                        for idx, line in enumerate(stdoutLines):
-                                            if re.match(r'data:image/\w+;base64', line):
-                                                image_url = get_image_url_from_base64(
-                                                    request,
-                                                    line,
-                                                    metadata,
-                                                    user,
-                                                )
-                                                if image_url:
-                                                    stdoutLines[idx] = f'![Output Image]({image_url})'
-
-                                        ci_output['stdout'] = '\n'.join(stdoutLines)
-
-                                    result = ci_output.get('result', '')
-
-                                    if isinstance(result, str):
-                                        resultLines = result.split('\n')
-                                        for idx, line in enumerate(resultLines):
-                                            if re.match(r'data:image/\w+;base64', line):
-                                                image_url = get_image_url_from_base64(
-                                                    request,
-                                                    line,
-                                                    metadata,
-                                                    user,
-                                                )
-                                                resultLines[idx] = f'![Output Image]({image_url})'
-                                        ci_output['result'] = '\n'.join(resultLines)
-                        except Exception as e:
-                            ci_output = str(e)
-
-                        ci_item['output'] = ci_output
-                        ci_item['status'] = 'completed'
-
-                        output.append(
-                            {
-                                'type': 'message',
-                                'id': output_id('msg'),
-                                'status': 'in_progress',
-                                'role': 'assistant',
-                                'content': [{'type': 'output_text', 'text': ''}],
-                            }
-                        )
-
-                        await event_emitter(
-                            {
-                                'type': 'chat:completion',
-                                'data': {
-                                    'content': serialize_output(output),
-                                    'output': output,
-                                },
-                            }
-                        )
-
-                        try:
-                            new_form_data = {
-                                **form_data,
-                                'model': model_id,
-                                'stream': True,
-                                'messages': [
-                                    *form_data['messages'],
-                                    *convert_output_to_messages(output, raw=True),
-                                ],
-                            }
-
-                            res = await generate_chat_completion(
-                                request,
-                                new_form_data,
-                                user,
-                                bypass_system_prompt=True,
-                            )
-
-                            if isinstance(res, StreamingResponse):
-                                await stream_body_handler(res, new_form_data)
-                            else:
-                                break
-                        except Exception as e:
-                            log.debug(e)
-                            break
 
                 # Mark all in-progress items as completed
                 for item in output:

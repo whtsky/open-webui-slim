@@ -53,7 +53,7 @@
 		return 'h' + depth;
 	};
 
-	const GROUPABLE_DETAIL_TYPES = new Set(['tool_calls', 'reasoning', 'code_interpreter']);
+	const GROUPABLE_DETAIL_TYPES = new Set(['tool_calls', 'reasoning']);
 
 	const isGroupableDetailToken = (token: Token & { attributes?: { type?: string } }) => {
 		return token?.type === 'details' && GROUPABLE_DETAIL_TYPES.has(token?.attributes?.type ?? '');

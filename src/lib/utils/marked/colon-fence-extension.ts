@@ -3,7 +3,6 @@
  *
  * Used by newer OpenAI chat models to wrap semantically distinct content:
  *   :::writing    – reusable prose (letters, articles, docs)
- *   :::code_execution – code execution output
  *   :::search_results  – web search results
  *
  * The extension is generic and will tokenize any :::<identifier> block.

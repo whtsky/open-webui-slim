@@ -46,7 +46,7 @@ def sanitize_code(code: str) -> str:
     Sanitize code for execution by applying all necessary cleanup steps.
 
     This is the recommended function to use before sending code to
-    interpreters like Jupyter or Pyodide.
+    external interpreters.
 
     Steps applied:
     1. Strip ANSI escape codes (from LLM output)
