@@ -1,5 +1,4 @@
 <script>
-	import { io } from 'socket.io-client';
 	import { spring } from 'svelte/motion';
 	import { Toaster, toast } from 'svelte-sonner';
 
@@ -63,7 +62,6 @@
 
 	import NotificationToast from '$lib/components/NotificationToast.svelte';
 	import AppSidebar from '$lib/components/app/AppSidebar.svelte';
-	import SyncStatsModal from '$lib/components/chat/Settings/SyncStatsModal.svelte';
 	import Spinner from '$lib/components/common/Spinner.svelte';
 	import { getUserSettings } from '$lib/apis/users';
 	import dayjs from 'dayjs';
@@ -108,6 +106,7 @@
 	const BREAKPOINT = 768;
 
 	const setupSocket = async (enableWebsocket) => {
+		const { io } = await import('socket.io-client');
 		const _socket = io(`${WEBUI_BASE_URL}` || undefined, {
 			reconnection: true,
 			reconnectionDelay: 1000,
@@ -905,8 +904,10 @@
 	{/if}
 {/if}
 
-{#if $config?.features.enable_community_sharing}
-	<SyncStatsModal bind:show={showSyncStatsModal} eventData={syncStatsEventData} />
+{#if $config?.features.enable_community_sharing && showSyncStatsModal}
+	{#await import('$lib/components/chat/Settings/SyncStatsModal.svelte') then { default: SyncStatsModal }}
+		<SyncStatsModal bind:show={showSyncStatsModal} eventData={syncStatsEventData} />
+	{/await}
 {/if}
 
 <Toaster

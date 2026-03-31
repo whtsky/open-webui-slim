@@ -2,8 +2,6 @@
 	import { toast } from 'svelte-sonner';
 	import { onMount, tick, getContext } from 'svelte';
 	import { openDB, deleteDB } from 'idb';
-	import fileSaver from 'file-saver';
-	const { saveAs } = fileSaver;
 
 	import { goto } from '$app/navigation';
 	import { page } from '$app/stores';
@@ -42,8 +40,6 @@
 	} from '$lib/stores';
 
 	import Sidebar from '$lib/components/layout/Sidebar.svelte';
-	import SettingsModal from '$lib/components/chat/SettingsModal.svelte';
-	import ChangelogModal from '$lib/components/ChangelogModal.svelte';
 	import AccountPending from '$lib/components/layout/Overlay/AccountPending.svelte';
 	import UpdateInfoToast from '$lib/components/layout/UpdateInfoToast.svelte';
 	import Spinner from '$lib/components/common/Spinner.svelte';
@@ -376,8 +372,17 @@
 	};
 </script>
 
-<SettingsModal bind:show={$showSettings} />
-<ChangelogModal bind:show={$showChangelog} />
+{#if $showSettings}
+	{#await import('$lib/components/chat/SettingsModal.svelte') then { default: SettingsModal }}
+		<SettingsModal bind:show={$showSettings} />
+	{/await}
+{/if}
+
+{#if $showChangelog}
+	{#await import('$lib/components/ChangelogModal.svelte') then { default: ChangelogModal }}
+		<ChangelogModal bind:show={$showChangelog} />
+	{/await}
+{/if}
 
 {#if version && compareVersion(version.latest, version.current) && ($settings?.showUpdateToast ?? true)}
 	<div class=" absolute bottom-8 right-8 z-50" in:fade={{ duration: 100 }}>
@@ -429,7 +434,8 @@
 												let blob = new Blob([JSON.stringify(localDBChats)], {
 													type: 'application/json'
 												});
-												saveAs(blob, `chat-export-${Date.now()}.json`);
+												const { default: fileSaver } = await import('file-saver');
+												fileSaver.saveAs(blob, `chat-export-${Date.now()}.json`);
 
 												const tx = DB.transaction('chats', 'readwrite');
 												await Promise.all([tx.store.clear(), tx.done]);
