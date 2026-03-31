@@ -79,7 +79,6 @@ from open_webui.routers import (
     auths,
     channels,
     chats,
-    notes,
     folders,
     configs,
     groups,
@@ -94,7 +93,6 @@ from open_webui.routers import (
     users,
     utils,
     scim,
-    terminals,
 )
 
 from open_webui.routers.retrieval import (
@@ -127,8 +125,6 @@ from open_webui.config import (
     THREAD_POOL_SIZE,
     # Tool Server Configs
     TOOL_SERVER_CONNECTIONS,
-    # Terminal Server
-    TERMINAL_SERVER_CONNECTIONS,
     ENABLE_MEMORIES,
     # Image
     AUTOMATIC1111_API_AUTH,
@@ -356,7 +352,6 @@ from open_webui.config import (
     ENABLE_FOLDERS,
     FOLDER_MAX_FILE_COUNT,
     ENABLE_CHANNELS,
-    ENABLE_NOTES,
     ENABLE_USER_STATUS,
     ENABLE_USER_WEBHOOKS,
     BYPASS_ADMIN_ACCESS_CONTROL,
@@ -500,7 +495,7 @@ from open_webui.utils.middleware import (
     process_chat_payload,
     process_chat_response,
 )
-from open_webui.utils.tools import set_tool_servers, set_terminal_servers
+from open_webui.utils.tools import set_tool_servers
 
 from open_webui.utils.auth import (
     get_license_data,
@@ -663,11 +658,8 @@ async def lifespan(app: FastAPI):
             )
             await set_tool_servers(mock_request)
             log.info(f'Initialized {len(app.state.TOOL_SERVERS)} tool server(s)')
-
-            await set_terminal_servers(mock_request)
-            log.info(f'Initialized {len(app.state.TERMINAL_SERVERS)} terminal server(s)')
         except Exception as e:
-            log.warning(f'Failed to initialize tool/terminal servers at startup: {e}')
+            log.warning(f'Failed to initialize tool servers at startup: {e}')
 
     # Mark application as ready to accept traffic from a startup perspective.
     app.state.startup_complete = True
@@ -746,15 +738,6 @@ app.state.TOOL_SERVERS = []
 
 ########################################
 #
-# TERMINAL SERVER
-#
-########################################
-
-app.state.config.TERMINAL_SERVER_CONNECTIONS = TERMINAL_SERVER_CONNECTIONS
-app.state.TERMINAL_SERVERS = []
-
-########################################
-#
 # DIRECT CONNECTIONS
 #
 ########################################
@@ -823,7 +806,6 @@ app.state.config.BANNERS = WEBUI_BANNERS
 app.state.config.ENABLE_FOLDERS = ENABLE_FOLDERS
 app.state.config.FOLDER_MAX_FILE_COUNT = FOLDER_MAX_FILE_COUNT
 app.state.config.ENABLE_CHANNELS = ENABLE_CHANNELS
-app.state.config.ENABLE_NOTES = ENABLE_NOTES
 app.state.config.ENABLE_USER_WEBHOOKS = ENABLE_USER_WEBHOOKS
 app.state.config.ENABLE_USER_STATUS = ENABLE_USER_STATUS
 
@@ -1412,7 +1394,6 @@ app.include_router(users.router, prefix='/api/v1/users', tags=['users'])
 
 app.include_router(channels.router, prefix='/api/v1/channels', tags=['channels'])
 app.include_router(chats.router, prefix='/api/v1/chats', tags=['chats'])
-app.include_router(notes.router, prefix='/api/v1/notes', tags=['notes'])
 
 
 app.include_router(models.router, prefix='/api/v1/models', tags=['models'])
@@ -1429,7 +1410,6 @@ app.include_router(functions.router, prefix='/api/v1/functions', tags=['function
 if ENABLE_ADMIN_ANALYTICS:
     app.include_router(analytics.router, prefix='/api/v1/analytics', tags=['analytics'])
 app.include_router(utils.router, prefix='/api/v1/utils', tags=['utils'])
-app.include_router(terminals.router, prefix='/api/v1/terminals', tags=['terminals'])
 
 # SCIM 2.0 API for identity management
 if ENABLE_SCIM:
@@ -1970,7 +1950,6 @@ async def get_app_config(request: Request):
                     'enable_folders': app.state.config.ENABLE_FOLDERS,
                     'folder_max_file_count': app.state.config.FOLDER_MAX_FILE_COUNT,
                     'enable_channels': app.state.config.ENABLE_CHANNELS,
-                    'enable_notes': app.state.config.ENABLE_NOTES,
                     'enable_web_search': app.state.config.ENABLE_WEB_SEARCH,
                     'enable_image_generation': app.state.config.ENABLE_IMAGE_GENERATION,
                     'enable_autocomplete_generation': app.state.config.ENABLE_AUTOCOMPLETE_GENERATION,

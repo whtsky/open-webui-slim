@@ -60,6 +60,8 @@ Additional slim-only removals in this fork:
   - Run button on Python code blocks, Pyodide file browser, model `code_interpreter` capability
   - Python code formatting (`/code/format` endpoint) is kept and now available to all authenticated users
 - **Ratings / Evaluations / Arena Models** — Removed the feedback database model and evaluations API/admin UI, the thumbs up/down response rating flow, and the anonymous arena-model wrapper system.
+- **Notes (Beta)** — Removed the collaborative notes feature including the notes model/router, all notes CRUD components, sidebar/search/input-menu integration, notes builtin tools, knowledge-selector notes search, Yjs note document handlers in Socket.IO, and admin toggle. Database migration files are preserved.
+- **OpenTerminal support** — Removed backend terminal tool resolution, terminal server configuration, startup initialization, and the `/api/v1/terminals` router.
 
 ### Database performance optimizations
 

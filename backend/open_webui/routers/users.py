@@ -190,8 +190,6 @@ class SharingPermissions(BaseModel):
     public_tools: bool = True
     skills: bool = False
     public_skills: bool = False
-    notes: bool = False
-    public_notes: bool = True
 
 
 class AccessGrantsPermissions(BaseModel):
@@ -223,7 +221,6 @@ class ChatPermissions(BaseModel):
 
 class FeaturesPermissions(BaseModel):
     api_keys: bool = False
-    notes: bool = True
     channels: bool = True
     folders: bool = True
     direct_tool_servers: bool = False

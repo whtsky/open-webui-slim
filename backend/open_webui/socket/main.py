@@ -12,7 +12,6 @@ import pycrdt as Y
 from open_webui.models.users import Users, UserNameResponse
 from open_webui.models.channels import Channels
 from open_webui.models.chats import Chats
-from open_webui.models.notes import Notes, NoteUpdateForm
 from open_webui.utils.redis import (
     get_sentinels_from_env,
     get_sentinel_url_from_env,
@@ -420,42 +419,6 @@ async def join_channel(sid, data):
             await sio.enter_room(sid, f'channel:{channel.id}')
 
 
-@sio.on('join-note')
-async def join_note(sid, data):
-    auth = data['auth'] if 'auth' in data else None
-    if not auth or 'token' not in auth:
-        return
-
-    token_data = decode_token(auth['token'])
-    if token_data is None or 'id' not in token_data:
-        return
-
-    user = Users.get_user_by_id(token_data['id'])
-    if not user:
-        return
-
-    note = Notes.get_note_by_id(data['note_id'])
-    if not note:
-        log.error(f'Note {data["note_id"]} not found for user {user.id}')
-        return
-
-    if (
-        user.role != 'admin'
-        and user.id != note.user_id
-        and not AccessGrants.has_access(
-            user_id=user.id,
-            resource_type='note',
-            resource_id=note.id,
-            permission='read',
-        )
-    ):
-        log.error(f'User {user.id} does not have access to note {data["note_id"]}')
-        return
-
-    log.debug(f'Joining note {note.id} for user {user.id}')
-    await sio.enter_room(sid, f'note:{note.id}')
-
-
 @sio.on('events:channel')
 async def channel_events(sid, data):
     room = f'channel:{data["channel_id"]}'
@@ -495,12 +458,10 @@ def normalize_document_id(document_id: str) -> str:
     """Canonicalize document IDs to prevent auth bypass via prefix variants.
 
     YdocManager normalizes storage keys by replacing ":" with "_", so
-    "note_abc" and "note:abc" resolve to the same underlying document.
+    "chat_abc" and "chat:abc" resolve to the same underlying document.
     We must rewrite underscore-prefixed IDs back to the colon form so
-    that authorization checks (which key on "note:") always fire.
+    that authorization checks always fire.
     """
-    if document_id.startswith('note_'):
-        document_id = 'note:' + document_id[5:]
     return document_id
 
 
@@ -513,26 +474,6 @@ async def ydoc_document_join(sid, data):
 
     try:
         document_id = normalize_document_id(data['document_id'])
-
-        if document_id.startswith('note:'):
-            note_id = document_id.split(':')[1]
-            note = Notes.get_note_by_id(note_id)
-            if not note:
-                log.error(f'Note {note_id} not found')
-                return
-
-            if (
-                user.get('role') != 'admin'
-                and user.get('id') != note.user_id
-                and not AccessGrants.has_access(
-                    user_id=user.get('id'),
-                    resource_type='note',
-                    resource_id=note.id,
-                    permission='read',
-                )
-            ):
-                log.error(f'User {user.get("id")} does not have access to note {note_id}')
-                return
 
         user_id = data.get('user_id', sid)
         user_name = data.get('user_name', 'Anonymous')
@@ -586,28 +527,7 @@ async def ydoc_document_join(sid, data):
 
 async def document_save_handler(document_id, data, user):
     document_id = normalize_document_id(document_id)
-
-    if document_id.startswith('note:'):
-        note_id = document_id.split(':')[1]
-        note = Notes.get_note_by_id(note_id)
-        if not note:
-            log.error(f'Note {note_id} not found')
-            return
-
-        if (
-            user.get('role') != 'admin'
-            and user.get('id') != note.user_id
-            and not AccessGrants.has_access(
-                user_id=user.get('id'),
-                resource_type='note',
-                resource_id=note.id,
-                permission='read',
-            )
-        ):
-            log.error(f'User {user.get("id")} does not have access to note {note_id}')
-            return
-
-        Notes.update_note_by_id(note_id, NoteUpdateForm(data=data))
+    pass
 
 
 @sio.on('ydoc:document:state')

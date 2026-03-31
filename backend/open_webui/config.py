@@ -1046,18 +1046,6 @@ TOOL_SERVER_CONNECTIONS = PersistentConfig(
 )
 
 ####################################
-# TERMINAL_SERVER
-####################################
-
-terminal_server_connections = json.loads(os.environ.get('TERMINAL_SERVER_CONNECTIONS', '[]'))
-
-TERMINAL_SERVER_CONNECTIONS = PersistentConfig(
-    'TERMINAL_SERVER_CONNECTIONS',
-    'terminal_server.connections',
-    terminal_server_connections,
-)
-
-####################################
 # WEBUI
 ####################################
 
@@ -1272,12 +1260,6 @@ USER_PERMISSIONS_WORKSPACE_SKILLS_ALLOW_PUBLIC_SHARING = (
 )
 
 
-USER_PERMISSIONS_NOTES_ALLOW_SHARING = os.environ.get('USER_PERMISSIONS_NOTES_ALLOW_SHARING', 'False').lower() == 'true'
-
-USER_PERMISSIONS_NOTES_ALLOW_PUBLIC_SHARING = (
-    os.environ.get('USER_PERMISSIONS_NOTES_ALLOW_PUBLIC_SHARING', 'False').lower() == 'true'
-)
-
 USER_PERMISSIONS_ACCESS_GRANTS_ALLOW_USERS = (
     os.environ.get('USER_PERMISSIONS_ACCESS_GRANTS_ALLOW_USERS', 'True').lower() == 'true'
 )
@@ -1344,7 +1326,6 @@ USER_PERMISSIONS_FEATURES_IMAGE_GENERATION = (
 
 USER_PERMISSIONS_FEATURES_FOLDERS = os.environ.get('USER_PERMISSIONS_FEATURES_FOLDERS', 'True').lower() == 'true'
 
-USER_PERMISSIONS_FEATURES_NOTES = os.environ.get('USER_PERMISSIONS_FEATURES_NOTES', 'True').lower() == 'true'
 
 USER_PERMISSIONS_FEATURES_CHANNELS = os.environ.get('USER_PERMISSIONS_FEATURES_CHANNELS', 'True').lower() == 'true'
 
@@ -1381,8 +1362,6 @@ DEFAULT_USER_PERMISSIONS = {
         'public_tools': USER_PERMISSIONS_WORKSPACE_TOOLS_ALLOW_PUBLIC_SHARING,
         'skills': USER_PERMISSIONS_WORKSPACE_SKILLS_ALLOW_SHARING,
         'public_skills': USER_PERMISSIONS_WORKSPACE_SKILLS_ALLOW_PUBLIC_SHARING,
-        'notes': USER_PERMISSIONS_NOTES_ALLOW_SHARING,
-        'public_notes': USER_PERMISSIONS_NOTES_ALLOW_PUBLIC_SHARING,
     },
     'access_grants': {
         'allow_users': USER_PERMISSIONS_ACCESS_GRANTS_ALLOW_USERS,
@@ -1412,7 +1391,6 @@ DEFAULT_USER_PERMISSIONS = {
     'features': {
         # General features
         'api_keys': USER_PERMISSIONS_FEATURES_API_KEYS,
-        'notes': USER_PERMISSIONS_FEATURES_NOTES,
         'folders': USER_PERMISSIONS_FEATURES_FOLDERS,
         'channels': USER_PERMISSIONS_FEATURES_CHANNELS,
         'direct_tool_servers': USER_PERMISSIONS_FEATURES_DIRECT_TOOL_SERVERS,
@@ -1450,11 +1428,6 @@ ENABLE_CHANNELS = PersistentConfig(
     os.environ.get('ENABLE_CHANNELS', 'False').lower() == 'true',
 )
 
-ENABLE_NOTES = PersistentConfig(
-    'ENABLE_NOTES',
-    'notes.enable',
-    os.environ.get('ENABLE_NOTES', 'True').lower() == 'true',
-)
 
 ENABLE_USER_STATUS = PersistentConfig(
     'ENABLE_USER_STATUS',

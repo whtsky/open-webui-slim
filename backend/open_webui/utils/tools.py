@@ -65,16 +65,12 @@ from open_webui.tools.builtin import (
     list_memories,
     get_current_timestamp,
     calculate_timestamp,
-    search_notes,
     search_chats,
     search_channels,
     search_channel_messages,
-    view_note,
     view_chat,
     view_channel_message,
     view_channel_thread,
-    replace_note_content,
-    write_note,
     list_knowledge_bases,
     search_knowledge_bases,
     query_knowledge_bases,
@@ -474,10 +470,6 @@ def get_builtin_tools(
     ):
         builtin_functions.append(edit_image)
 
-    # Notes tools - search, view, create, and update user's notes (if builtin category enabled AND notes enabled globally)
-    if is_builtin_tool_enabled('notes') and getattr(request.app.state.config, 'ENABLE_NOTES', False):
-        builtin_functions.extend([search_notes, view_note, write_note, replace_note_content])
-
     # Channels tools - search channels and messages (if builtin category enabled AND channels enabled globally)
     if is_builtin_tool_enabled('channels') and getattr(request.app.state.config, 'ENABLE_CHANNELS', False):
         builtin_functions.extend(
@@ -803,233 +795,6 @@ async def get_tool_servers(request: Request):
         tool_servers = await set_tool_servers(request)
 
     return tool_servers
-
-
-async def get_terminal_cwd(
-    base_url: str,
-    headers: dict,
-    cookies: Optional[dict] = None,
-) -> Optional[str]:
-    """Fetch the current working directory from a terminal server."""
-    try:
-        cwd_url = f'{base_url.rstrip("/")}/files/cwd'
-        async with aiohttp.ClientSession(
-            timeout=aiohttp.ClientTimeout(total=5),
-            trust_env=True,
-        ) as session:
-            async with session.get(cwd_url, headers=headers, cookies=cookies or {}) as resp:
-                if resp.status == 200:
-                    data = await resp.json()
-                    return data.get('cwd')
-    except Exception as e:
-        log.debug(f'Failed to fetch terminal CWD: {e}')
-    return None
-
-
-async def get_terminal_system_prompt(
-    base_url: str,
-    headers: dict,
-    cookies: Optional[dict] = None,
-) -> Optional[str]:
-    """Fetch the system prompt from a terminal server.
-
-    Checks ``/api/config`` for the ``system`` feature flag first;
-    only fetches ``/system`` if the flag is present.  Returns *None*
-    silently when the server doesn't support the endpoint.
-    """
-    base = base_url.rstrip('/')
-    try:
-        async with aiohttp.ClientSession(
-            timeout=aiohttp.ClientTimeout(total=3),
-            trust_env=True,
-        ) as session:
-            # 1. Check feature flag
-            async with session.get(f'{base}/api/config') as resp:
-                if resp.status != 200:
-                    return None
-                config = await resp.json()
-                if not config.get('features', {}).get('system'):
-                    return None
-
-            # 2. Fetch system prompt
-            async with session.get(f'{base}/system', headers=headers, cookies=cookies or {}) as resp:
-                if resp.status == 200:
-                    data = await resp.json()
-                    return data.get('prompt')
-    except Exception as e:
-        log.debug(f'Failed to fetch terminal system prompt: {e}')
-    return None
-
-
-async def set_terminal_servers(request: Request):
-    """Load and cache OpenAPI specs from all TERMINAL_SERVER_CONNECTIONS."""
-    connections = request.app.state.config.TERMINAL_SERVER_CONNECTIONS or []
-
-    # Build server configs compatible with get_tool_servers_data
-    # Terminal connections store id/name at top level; translate to info dict
-    server_configs = []
-    for connection in connections:
-        if not connection.get('url'):
-            continue
-
-        enabled = connection.get('enabled', True)
-
-        base_url = connection.get('url', '').rstrip('/')
-        policy_id = connection.get('policy_id', '')
-
-        # Orchestrator connections route through /p/{policy_id}/ — the
-        # OpenAPI spec lives on the proxied terminal, not the orchestrator.
-        if connection.get('server_type') == 'orchestrator' and policy_id:
-            base_url = f'{base_url}/p/{policy_id}'
-
-        server_configs.append(
-            {
-                'url': base_url,
-                'key': connection.get('key', ''),
-                'auth_type': connection.get('auth_type', 'bearer'),
-                'path': connection.get('path', '/openapi.json'),
-                'spec_type': 'url',
-                # get_tool_servers_data reads config.enable to filter active servers
-                'config': {'enable': enabled},
-                'info': {
-                    'id': connection.get('id', ''),
-                    'name': connection.get('name', ''),
-                },
-            }
-        )
-
-    request.app.state.TERMINAL_SERVERS = await get_tool_servers_data(server_configs)
-
-    # Fetch system prompts concurrently (runs at cache time, not per-request)
-    connections_by_id = {c.get('id'): c for c in connections if c.get('id')}
-
-    async def _fetch_system_prompt(server):
-        connection = connections_by_id.get(server.get('id'))
-        if not connection:
-            return
-        headers = {}
-        if connection.get('auth_type', 'bearer') == 'bearer':
-            headers['Authorization'] = f'Bearer {connection.get("key", "")}'
-        prompt = await get_terminal_system_prompt(server['url'], headers)
-        if prompt:
-            server['system_prompt'] = prompt
-
-    await asyncio.gather(
-        *[_fetch_system_prompt(s) for s in request.app.state.TERMINAL_SERVERS],
-        return_exceptions=True,
-    )
-
-    if request.app.state.redis is not None:
-        await request.app.state.redis.set('terminal_servers', json.dumps(request.app.state.TERMINAL_SERVERS))
-
-    return request.app.state.TERMINAL_SERVERS
-
-
-async def get_terminal_servers(request: Request):
-    """Return cached terminal server specs, loading if needed."""
-    terminal_servers = []
-    if request.app.state.redis is not None:
-        try:
-            terminal_servers = json.loads(await request.app.state.redis.get('terminal_servers'))
-            request.app.state.TERMINAL_SERVERS = terminal_servers
-        except Exception as e:
-            log.error(f'Error fetching terminal_servers from Redis: {e}')
-
-    if not terminal_servers:
-        terminal_servers = await set_terminal_servers(request)
-
-    return terminal_servers
-
-
-async def get_terminal_tools(
-    request: Request,
-    terminal_id: str,
-    user: UserModel,
-    extra_params: dict,
-) -> dict[str, dict] | tuple[dict[str, dict], Optional[str]]:
-    """Resolve tools for a terminal server identified by terminal_id.
-
-    - Finds the connection in TERMINAL_SERVER_CONNECTIONS
-    - Checks access_grants
-    - Loads specs from cache
-    - Builds callables that route through the terminal proxy
-    """
-    connections = request.app.state.config.TERMINAL_SERVER_CONNECTIONS or []
-    connection = next((c for c in connections if c.get('id') == terminal_id), None)
-    if connection is None:
-        log.warning(f'Terminal server not found: {terminal_id}')
-        return {}
-
-    user_group_ids = {group.id for group in Groups.get_groups_by_member_id(user.id)}
-    if not has_connection_access(user, connection, user_group_ids):
-        log.warning(f'Access denied to terminal {terminal_id} for user {user.id}')
-        return {}
-
-    # Find the cached spec data for this terminal
-    terminal_servers = await get_terminal_servers(request)
-    server_data = next((s for s in terminal_servers if s.get('id') == terminal_id), None)
-    if server_data is None:
-        log.warning(f'Terminal server spec not found for {terminal_id}')
-        return {}
-
-    specs = server_data.get('specs', [])
-    if not specs:
-        return {}
-
-    # Build auth headers
-    auth_type = connection.get('auth_type', 'bearer')
-    cookies = {}
-    headers = {'Content-Type': 'application/json', 'X-User-Id': user.id}
-
-    if auth_type == 'bearer':
-        headers['Authorization'] = f'Bearer {connection.get("key", "")}'
-    elif auth_type == 'session':
-        cookies = request.cookies
-        headers['Authorization'] = f'Bearer {request.state.token.credentials}'
-    elif auth_type == 'system_oauth':
-        cookies = request.cookies
-        oauth_token = extra_params.get('__oauth_token__', None)
-        if oauth_token:
-            headers['Authorization'] = f'Bearer {oauth_token.get("access_token", "")}'
-    # auth_type == "none": no Authorization header
-
-    system_prompt = server_data.get('system_prompt')
-    terminal_cwd = await get_terminal_cwd(connection.get('url', ''), headers, cookies)
-
-    tools_dict = {}
-    for spec in specs:
-        function_name = spec['name']
-        tool_spec = clean_openai_tool_schema(spec)
-
-        if function_name == 'run_command' and terminal_cwd:
-            tool_spec['description'] = (
-                tool_spec.get('description', '') + f'\n\nThe current working directory is: {terminal_cwd}'
-            )
-
-        def make_tool_function(fn_name, srv_data, hdrs, cks):
-            async def tool_function(**kwargs):
-                return await execute_tool_server(
-                    url=srv_data['url'],
-                    headers=hdrs,
-                    cookies=cks,
-                    name=fn_name,
-                    params=kwargs,
-                    server_data=srv_data,
-                )
-
-            return tool_function
-
-        tool_function = make_tool_function(function_name, server_data, headers, cookies)
-        callable = get_async_tool_function_and_apply_extra_params(tool_function, {})
-
-        tools_dict[function_name] = {
-            'tool_id': f'terminal:{terminal_id}',
-            'callable': callable,
-            'spec': tool_spec,
-            'type': 'terminal',
-        }
-
-    return tools_dict, system_prompt
 
 
 async def get_tool_server_data(url: str, headers: Optional[dict]) -> Dict[str, Any]:
