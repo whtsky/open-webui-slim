@@ -77,7 +77,6 @@ from open_webui.routers import (
     pipelines,
     tasks,
     auths,
-    channels,
     chats,
     folders,
     configs,
@@ -351,7 +350,6 @@ from open_webui.config import (
     API_KEYS_ALLOWED_ENDPOINTS,
     ENABLE_FOLDERS,
     FOLDER_MAX_FILE_COUNT,
-    ENABLE_CHANNELS,
     ENABLE_USER_STATUS,
     ENABLE_USER_WEBHOOKS,
     BYPASS_ADMIN_ACCESS_CONTROL,
@@ -805,7 +803,6 @@ app.state.config.BANNERS = WEBUI_BANNERS
 
 app.state.config.ENABLE_FOLDERS = ENABLE_FOLDERS
 app.state.config.FOLDER_MAX_FILE_COUNT = FOLDER_MAX_FILE_COUNT
-app.state.config.ENABLE_CHANNELS = ENABLE_CHANNELS
 app.state.config.ENABLE_USER_WEBHOOKS = ENABLE_USER_WEBHOOKS
 app.state.config.ENABLE_USER_STATUS = ENABLE_USER_STATUS
 
@@ -1392,7 +1389,6 @@ app.include_router(auths.router, prefix='/api/v1/auths', tags=['auths'])
 app.include_router(users.router, prefix='/api/v1/users', tags=['users'])
 
 
-app.include_router(channels.router, prefix='/api/v1/channels', tags=['channels'])
 app.include_router(chats.router, prefix='/api/v1/chats', tags=['chats'])
 
 
@@ -1949,7 +1945,6 @@ async def get_app_config(request: Request):
                     'enable_direct_connections': app.state.config.ENABLE_DIRECT_CONNECTIONS,
                     'enable_folders': app.state.config.ENABLE_FOLDERS,
                     'folder_max_file_count': app.state.config.FOLDER_MAX_FILE_COUNT,
-                    'enable_channels': app.state.config.ENABLE_CHANNELS,
                     'enable_web_search': app.state.config.ENABLE_WEB_SEARCH,
                     'enable_image_generation': app.state.config.ENABLE_IMAGE_GENERATION,
                     'enable_autocomplete_generation': app.state.config.ENABLE_AUTOCOMPLETE_GENERATION,

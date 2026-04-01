@@ -947,7 +947,6 @@ async def get_admin_config(request: Request, user=Depends(get_admin_user)):
         'JWT_EXPIRES_IN': request.app.state.config.JWT_EXPIRES_IN,
         'ENABLE_FOLDERS': request.app.state.config.ENABLE_FOLDERS,
         'FOLDER_MAX_FILE_COUNT': request.app.state.config.FOLDER_MAX_FILE_COUNT,
-        'ENABLE_CHANNELS': request.app.state.config.ENABLE_CHANNELS,
         'ENABLE_MEMORIES': request.app.state.config.ENABLE_MEMORIES,
         'ENABLE_USER_WEBHOOKS': request.app.state.config.ENABLE_USER_WEBHOOKS,
         'ENABLE_USER_STATUS': request.app.state.config.ENABLE_USER_STATUS,
@@ -970,7 +969,6 @@ class AdminConfig(BaseModel):
     JWT_EXPIRES_IN: str
     ENABLE_FOLDERS: bool
     FOLDER_MAX_FILE_COUNT: Optional[int | str] = None
-    ENABLE_CHANNELS: bool
     ENABLE_MEMORIES: bool
     ENABLE_USER_WEBHOOKS: bool
     ENABLE_USER_STATUS: bool
@@ -994,7 +992,6 @@ async def update_admin_config(request: Request, form_data: AdminConfig, user=Dep
     request.app.state.config.FOLDER_MAX_FILE_COUNT = (
         int(form_data.FOLDER_MAX_FILE_COUNT) if form_data.FOLDER_MAX_FILE_COUNT else ''
     )
-    request.app.state.config.ENABLE_CHANNELS = form_data.ENABLE_CHANNELS
     request.app.state.config.ENABLE_MEMORIES = form_data.ENABLE_MEMORIES
 
     if form_data.DEFAULT_USER_ROLE in ['pending', 'user', 'admin']:
@@ -1029,7 +1026,6 @@ async def update_admin_config(request: Request, form_data: AdminConfig, user=Dep
         'JWT_EXPIRES_IN': request.app.state.config.JWT_EXPIRES_IN,
         'ENABLE_FOLDERS': request.app.state.config.ENABLE_FOLDERS,
         'FOLDER_MAX_FILE_COUNT': request.app.state.config.FOLDER_MAX_FILE_COUNT,
-        'ENABLE_CHANNELS': request.app.state.config.ENABLE_CHANNELS,
         'ENABLE_MEMORIES': request.app.state.config.ENABLE_MEMORIES,
         'ENABLE_USER_WEBHOOKS': request.app.state.config.ENABLE_USER_WEBHOOKS,
         'ENABLE_USER_STATUS': request.app.state.config.ENABLE_USER_STATUS,

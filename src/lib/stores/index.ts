@@ -51,9 +51,6 @@ export const TTSWorker = writable(null);
 export const chatId = writable('');
 export const chatTitle = writable('');
 
-export const channels = writable([]);
-export const channelId = writable(null);
-
 export const chats = writable(null);
 export const pinnedChats = writable([]);
 export const tags = writable([]);
@@ -69,7 +66,6 @@ export const skills = writable(null);
 export const functions = writable(null);
 
 export const toolServers = writable([]);
-export const terminalServers = writable([]);
 
 export const banners: Writable<Banner[]> = writable([]);
 
@@ -97,7 +93,6 @@ export const showCallOverlay = writable(false);
 export const showFileNav = writable(false);
 export const showFileNavPath: Writable<string | null> = writable(null);
 export const showFileNavDir: Writable<string | null> = writable(null);
-export const selectedTerminalId: Writable<string | null> = writable(null);
 
 export const artifactCode = writable(null);
 export const artifactContents = writable(null);

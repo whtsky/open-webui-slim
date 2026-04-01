@@ -10,7 +10,6 @@ from redis import asyncio as aioredis
 import pycrdt as Y
 
 from open_webui.models.users import Users, UserNameResponse
-from open_webui.models.channels import Channels
 from open_webui.models.chats import Chats
 from open_webui.utils.redis import (
     get_sentinels_from_env,
@@ -379,13 +378,6 @@ async def user_join(sid, data):
 
     await sio.enter_room(sid, f'user:{user.id}')
 
-    # Join all the channels only if user has channels permission
-    if user.role == 'admin' or has_permission(user.id, 'features.channels'):
-        channels = Channels.get_channels_by_user_id(user.id)
-        log.debug(f'{channels=}')
-        for channel in channels:
-            await sio.enter_room(sid, f'channel:{channel.id}')
-
     return {'id': user.id, 'name': user.name}
 
 
@@ -395,63 +387,6 @@ async def heartbeat(sid, data):
     if user:
         SESSION_POOL[sid] = {**user, 'last_seen_at': int(time.time())}
         await asyncio.to_thread(Users.update_last_active_by_id, user['id'])
-
-
-@sio.on('join-channels')
-async def join_channel(sid, data):
-    auth = data['auth'] if 'auth' in data else None
-    if not auth or 'token' not in auth:
-        return
-
-    data = decode_token(auth['token'])
-    if data is None or 'id' not in data:
-        return
-
-    user = Users.get_user_by_id(data['id'])
-    if not user:
-        return
-
-    # Join all the channels only if user has channels permission
-    if user.role == 'admin' or has_permission(user.id, 'features.channels'):
-        channels = Channels.get_channels_by_user_id(user.id)
-        log.debug(f'{channels=}')
-        for channel in channels:
-            await sio.enter_room(sid, f'channel:{channel.id}')
-
-
-@sio.on('events:channel')
-async def channel_events(sid, data):
-    room = f'channel:{data["channel_id"]}'
-    participants = sio.manager.get_participants(
-        namespace='/',
-        room=room,
-    )
-
-    sids = [sid for sid, _ in participants]
-    if sid not in sids:
-        return
-
-    event_data = data['data']
-    event_type = event_data['type']
-
-    user = SESSION_POOL.get(sid)
-
-    if not user:
-        return
-
-    if event_type == 'typing':
-        await sio.emit(
-            'events:channel',
-            {
-                'channel_id': data['channel_id'],
-                'message_id': data.get('message_id', None),
-                'data': event_data,
-                'user': UserNameResponse(**user).model_dump(),
-            },
-            room=room,
-        )
-    elif event_type == 'last_read_at':
-        Channels.update_member_last_read_at(data['channel_id'], user['id'])
 
 
 def normalize_document_id(document_id: str) -> str:

@@ -1327,8 +1327,6 @@ USER_PERMISSIONS_FEATURES_IMAGE_GENERATION = (
 USER_PERMISSIONS_FEATURES_FOLDERS = os.environ.get('USER_PERMISSIONS_FEATURES_FOLDERS', 'True').lower() == 'true'
 
 
-USER_PERMISSIONS_FEATURES_CHANNELS = os.environ.get('USER_PERMISSIONS_FEATURES_CHANNELS', 'True').lower() == 'true'
-
 USER_PERMISSIONS_FEATURES_API_KEYS = os.environ.get('USER_PERMISSIONS_FEATURES_API_KEYS', 'False').lower() == 'true'
 
 USER_PERMISSIONS_FEATURES_MEMORIES = os.environ.get('USER_PERMISSIONS_FEATURES_MEMORIES', 'True').lower() == 'true'
@@ -1392,7 +1390,6 @@ DEFAULT_USER_PERMISSIONS = {
         # General features
         'api_keys': USER_PERMISSIONS_FEATURES_API_KEYS,
         'folders': USER_PERMISSIONS_FEATURES_FOLDERS,
-        'channels': USER_PERMISSIONS_FEATURES_CHANNELS,
         'direct_tool_servers': USER_PERMISSIONS_FEATURES_DIRECT_TOOL_SERVERS,
         # Chat features
         'web_search': USER_PERMISSIONS_FEATURES_WEB_SEARCH,
@@ -1421,13 +1418,6 @@ FOLDER_MAX_FILE_COUNT = PersistentConfig(
     'folders.max_file_count',
     os.environ.get('FOLDER_MAX_FILE_COUNT', ''),
 )
-
-ENABLE_CHANNELS = PersistentConfig(
-    'ENABLE_CHANNELS',
-    'channels.enable',
-    os.environ.get('ENABLE_CHANNELS', 'False').lower() == 'true',
-)
-
 
 ENABLE_USER_STATUS = PersistentConfig(
     'ENABLE_USER_STATUS',

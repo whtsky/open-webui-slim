@@ -23,10 +23,6 @@
 			label: $i18n.t('Knowledge Base'),
 			description: $i18n.t('Browse and query knowledge bases')
 		},
-		channels: {
-			label: $i18n.t('Channels'),
-			description: $i18n.t('Search channels and channel messages')
-		},
 		web_search: {
 			label: $i18n.t('Web Search'),
 			description: $i18n.t('Search the web and fetch URLs')

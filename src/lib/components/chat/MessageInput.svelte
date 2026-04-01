@@ -28,11 +28,9 @@
 		showCallOverlay,
 		tools,
 		toolServers,
-		terminalServers,
 		user as _user,
 		showControls,
 		showSettings,
-		selectedTerminalId,
 		TTSWorker,
 		temporaryChatEnabled
 	} from '$lib/stores';
@@ -84,7 +82,6 @@
 	import InputVariablesModal from './MessageInput/InputVariablesModal.svelte';
 	import Voice from '../icons/Voice.svelte';
 	import IntegrationsMenu from './MessageInput/IntegrationsMenu.svelte';
-	import TerminalMenu from './MessageInput/TerminalMenu.svelte';
 	import Component from '../icons/Component.svelte';
 	import PlusAlt from '../icons/PlusAlt.svelte';
 	import Dropdown from '../common/Dropdown.svelte';
@@ -128,8 +125,6 @@
 	export let webSearchEnabled = false;
 
 	export let pendingOAuthTools = [];
-
-	let showTerminalMenu = false;
 
 	export let messageQueue: { id: string; prompt: string; files: any[] }[] = [];
 	export let onQueueSendNow: (id: string) => void = () => {};
@@ -1780,11 +1775,6 @@
 										</div>
 									{:else}
 										{#if !history?.currentId || history.messages[history.currentId]?.done == true}
-											<!-- Terminal Server Selector -->
-											{#if ($terminalServers ?? []).length > 0 || ($settings?.terminalServers ?? []).some((s) => s.url)}
-												<TerminalMenu bind:show={showTerminalMenu} />
-											{/if}
-
 											{#if $_user?.role === 'admin' || ($_user?.permissions?.chat?.stt ?? true)}
 												<!-- {$i18n.t('Record voice')} -->
 												<Tooltip content={$i18n.t('Dictate')}>

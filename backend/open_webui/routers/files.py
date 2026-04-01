@@ -27,7 +27,6 @@ from open_webui.internal.db import get_session, SessionLocal
 from open_webui.constants import ERROR_MESSAGES
 from open_webui.retrieval.vector.factory import VECTOR_DB_CLIENT
 
-from open_webui.models.channels import Channels
 from open_webui.models.users import Users
 from open_webui.models.files import (
     FileForm,
@@ -256,11 +255,6 @@ def upload_file_handler(
             ),
             db=db,
         )
-
-        if 'channel_id' in file_metadata:
-            channel = Channels.get_channel_by_id_and_user_id(file_metadata['channel_id'], user.id, db=db)
-            if channel:
-                Channels.add_file_to_channel_by_id(channel.id, file_item.id, user.id, db=db)
 
         if process:
             if background_tasks and process_in_background:

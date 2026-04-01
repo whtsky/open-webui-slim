@@ -38,14 +38,10 @@
 		artifactContents,
 		tools,
 		toolServers,
-		terminalServers,
 		functions,
 		selectedFolder,
 		pinnedChats,
 		showEmbeds,
-		selectedTerminalId,
-		showFileNavPath,
-		showFileNavDir,
 		chatRequestQueues
 	} from '$lib/stores';
 
@@ -60,8 +56,7 @@
 		processDetails,
 		removeAllDetails,
 		getCodeBlockContents,
-		isYoutubeUrl,
-		displayFileHandler
+		isYoutubeUrl
 	} from '$lib/utils';
 	import { AudioQueue } from '$lib/utils/audio';
 
@@ -390,18 +385,6 @@
 		saveChatHandler(_chatId, history);
 	};
 
-	const terminalEventHandler = (type: string, data: any) => {
-		if (type === 'terminal:display_file') {
-			if (!data?.path) return;
-			displayFileHandler(data.path, { showControls, showFileNavPath });
-		} else if (type === 'terminal:write_file' || type === 'terminal:replace_file_content') {
-			if (!data?.path) return;
-			showFileNavDir.set(data.path);
-		} else if (type === 'terminal:run_command') {
-			showFileNavDir.set('/');
-		}
-	};
-
 	const chatEventHandler = async (event, cb) => {
 		console.log(event);
 
@@ -520,8 +503,6 @@
 					eventConfirmationInputPlaceholder = data.placeholder;
 					eventConfirmationInputValue = data?.value ?? '';
 					eventConfirmationInputType = data?.type ?? '';
-				} else if (type.startsWith('terminal:')) {
-					terminalEventHandler(type, data);
 				} else {
 					console.log('Unknown message type', data);
 				}
@@ -630,17 +611,6 @@
 
 		const audioQueueInstance = new AudioQueue(document.getElementById('audioElement'));
 		audioQueue.set(audioQueueInstance);
-
-		// Restore direct terminal enabled states based on persisted selectedTerminalId
-		if ($settings?.terminalServers?.length) {
-			settings.set({
-				...$settings,
-				terminalServers: ($settings.terminalServers ?? []).map((s) => ({
-					...s,
-					enabled: $selectedTerminalId !== null && s.url === $selectedTerminalId
-				}))
-			});
-		}
 
 		const pageSubscribe = page.subscribe(async (p) => {
 			if (p.url.pathname === '/') {
@@ -2180,9 +2150,6 @@
 			});
 		}
 
-		// Use the user-selected terminal from the dropdown
-		const activeTerminalId = $selectedTerminalId ?? null;
-
 		const res = await generateOpenAIChatCompletion(
 			localStorage.token,
 			{
@@ -2200,14 +2167,9 @@
 				filter_ids: selectedFilterIds.length > 0 ? selectedFilterIds : undefined,
 				tool_ids: toolIds.length > 0 ? toolIds : undefined,
 				skill_ids: skillIds.length > 0 ? skillIds : undefined,
-				terminal_id: activeTerminalId ?? undefined,
-				tool_servers: [
-					...($toolServers ?? []).filter(
-						(server, idx) => toolServerIds.includes(idx) || toolServerIds.includes(server?.id)
-					),
-					// Direct terminal servers — always included when enabled (not routed through selectedToolIds)
-					...($terminalServers ?? []).filter((t) => !t.id)
-				],
+				tool_servers: ($toolServers ?? []).filter(
+					(server, idx) => toolServerIds.includes(idx) || toolServerIds.includes(server?.id)
+				),
 				features: getFeatures(),
 				variables: {
 					...getPromptVariables(

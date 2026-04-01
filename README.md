@@ -61,7 +61,8 @@ Additional slim-only removals in this fork:
   - Python code formatting (`/code/format` endpoint) is kept and now available to all authenticated users
 - **Ratings / Evaluations / Arena Models** — Removed the feedback database model and evaluations API/admin UI, the thumbs up/down response rating flow, and the anonymous arena-model wrapper system.
 - **Notes (Beta)** — Removed the collaborative notes feature including the notes model/router, all notes CRUD components, sidebar/search/input-menu integration, notes builtin tools, knowledge-selector notes search, Yjs note document handlers in Socket.IO, and admin toggle. Database migration files are preserved.
-- **OpenTerminal support** — Removed backend terminal tool resolution, terminal server configuration, startup initialization, and the `/api/v1/terminals` router.
+- **Channels (Beta)** — Removed the real-time messaging channels feature including the channels model/router/utils, all channel UI components (~17 files), sidebar channel list and creation modal, channels builtin tools, channel message webhooks, Socket.IO channel room/event handlers, admin toggle, user permission toggles, Yjs collaboration provider, and `yjs`/`y-prosemirror`/`y-protocols` npm packages. Shared components (ProfilePreview, UserStatus) relocated to `common/`. Database migration files are preserved.
+- **OpenTerminal support** — Removed the entire Open Terminal integration (~2,600 LOC). This includes terminal tool resolution in the chat pipeline, terminal server configuration/startup, the `/api/v1/terminals` router, xterm.js terminal UI, file browser (FileNav), terminal menu, admin/user terminal server settings, and 3 npm packages (`@xterm/xterm`, `@xterm/addon-fit`, `@xterm/addon-web-links`).
 
 ### Database performance optimizations
 

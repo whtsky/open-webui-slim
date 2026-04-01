@@ -51,7 +51,6 @@ export const DEFAULT_PERMISSIONS = {
 	},
 	features: {
 		api_keys: false,
-		channels: true,
 		folders: true,
 		direct_tool_servers: false,
 		web_search: true,
