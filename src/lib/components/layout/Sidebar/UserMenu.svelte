@@ -19,7 +19,7 @@
 	import Keyboard from '$lib/components/icons/Keyboard.svelte';
 	import ShortcutsModal from '$lib/components/chat/ShortcutsModal.svelte';
 	import Settings from '$lib/components/icons/Settings.svelte';
-	import Code from '$lib/components/icons/Code.svelte';
+
 	import UserGroup from '$lib/components/icons/UserGroup.svelte';
 	import SignOut from '$lib/components/icons/SignOut.svelte';
 	import FaceSmile from '$lib/components/icons/FaceSmile.svelte';
@@ -236,28 +236,6 @@
 			</button>
 
 			{#if role === 'admin'}
-				<a
-					href="/playground"
-					draggable="false"
-					class="flex rounded-xl py-1.5 px-3 w-full hover:bg-gray-50 dark:hover:bg-gray-800 transition cursor-pointer select-none"
-					on:click={async (e) => {
-						if (e.metaKey || e.ctrlKey || e.shiftKey || e.button === 1) {
-							return;
-						}
-						e.preventDefault();
-						show = false;
-						goto('/playground');
-						if ($mobile) {
-							await tick();
-							showSidebar.set(false);
-						}
-					}}
-				>
-					<div class=" self-center mr-3">
-						<Code className="size-5" strokeWidth="1.5" />
-					</div>
-					<div class=" self-center truncate">{$i18n.t('Playground')}</div>
-				</a>
 				<a
 					href="/admin"
 					draggable="false"

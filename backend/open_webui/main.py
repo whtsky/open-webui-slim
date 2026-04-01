@@ -1220,16 +1220,9 @@ class RedirectMiddleware(BaseHTTPMiddleware):
     async def dispatch(self, request: Request, call_next):
         # Check if the request is a GET request
         if request.method == 'GET':
-            path = request.url.path
             query_params = dict(parse_qs(urlparse(str(request.url)).query))
 
             redirect_params = {}
-
-            # Check for the specific watch path and the presence of 'v' parameter
-            if path.endswith('/watch') and 'v' in query_params:
-                # Extract the first 'v' parameter
-                youtube_video_id = query_params['v'][0]
-                redirect_params['youtube'] = youtube_video_id
 
             if 'shared' in query_params and len(query_params['shared']) > 0:
                 # PWA share_target support
