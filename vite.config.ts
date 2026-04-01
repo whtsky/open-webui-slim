@@ -21,12 +21,7 @@ export default defineConfig({
 		APP_BUILD_HASH: JSON.stringify(process.env.APP_BUILD_HASH || 'dev-build')
 	},
 	build: {
-		sourcemap: true,
-		rollupOptions: {
-			output: {
-				experimentalMinChunkSize: 20_000
-			}
-		}
+		sourcemap: true
 	},
 	worker: {
 		format: 'es'

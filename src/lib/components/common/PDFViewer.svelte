@@ -1,6 +1,5 @@
 <script lang="ts">
 	import { onMount, onDestroy } from 'svelte';
-	import pdfWorkerUrl from 'pdfjs-dist/build/pdf.worker.mjs?url';
 	import panzoom, { type PanZoom } from 'panzoom';
 	import Spinner from './Spinner.svelte';
 
@@ -158,7 +157,10 @@
 		error = '';
 
 		try {
-			const pdfjs = await import('pdfjs-dist');
+			const [pdfjs, { default: pdfWorkerUrl }] = await Promise.all([
+				import('pdfjs-dist'),
+				import('pdfjs-dist/build/pdf.worker.mjs?url')
+			]);
 			pdfjs.GlobalWorkerOptions.workerSrc = pdfWorkerUrl;
 
 			let pdfData: ArrayBuffer | Uint8Array;
