@@ -40,19 +40,21 @@ from open_webui.models.files import FileModel, FileUpdateForm, Files
 from open_webui.utils.access_control.files import has_access_to_file
 from open_webui.models.knowledge import Knowledges
 from open_webui.storage.provider import Storage
-from open_webui.internal.db import get_session, get_db
-from sqlalchemy.orm import Session
+from open_webui.internal.db import get_async_db, get_async_session
+from sqlalchemy.ext.asyncio import AsyncSession
 
 
 from open_webui.retrieval.vector.factory import VECTOR_DB_CLIENT
+from open_webui.retrieval.vector.async_client import ASYNC_VECTOR_DB_CLIENT
 
 # Document loaders
-from open_webui.retrieval.loaders.main import Loader
+
 from open_webui.retrieval.loaders.youtube import YoutubeLoader
 
 # Web search engines
 from open_webui.retrieval.web.main import SearchResult
 from open_webui.retrieval.web.utils import get_web_loader
+from open_webui.retrieval.web.ollama import search_ollama_cloud
 from open_webui.retrieval.web.perplexity_search import search_perplexity_search
 from open_webui.retrieval.web.brave import search_brave
 from open_webui.retrieval.web.kagi import search_kagi
@@ -80,6 +82,8 @@ from open_webui.retrieval.web.yandex import search_yandex
 from open_webui.retrieval.web.ydc import search_youcom
 
 from open_webui.retrieval.utils import (
+    build_loader_from_config,
+    filter_accessible_collections,
     get_content_from_url,
     get_embedding_function,
     get_reranking_function,
@@ -139,10 +143,18 @@ def get_ef(
 ):
     ef = None
     if embedding_model and engine == '':
-        raise ValueError(
-            'Local embedding (sentence-transformers) is not available in slim build. '
-            'Set RAG_EMBEDDING_ENGINE to "openai" or "azure_openai" in your environment.'
-        )
+        from sentence_transformers import SentenceTransformer
+
+        try:
+            ef = SentenceTransformer(
+                get_model_path(embedding_model, auto_update),
+                device=DEVICE_TYPE,
+                trust_remote_code=RAG_EMBEDDING_MODEL_TRUST_REMOTE_CODE,
+                backend=SENTENCE_TRANSFORMERS_BACKEND,
+                model_kwargs=SENTENCE_TRANSFORMERS_MODEL_KWARGS,
+            )
+        except Exception as e:
+            log.error(f'Error loading SentenceTransformer: {e}')
 
     return ef
 
@@ -160,10 +172,17 @@ def get_rf(
     timeout_value = int(external_reranker_timeout) if external_reranker_timeout else None
     if reranking_model:
         if any(model in reranking_model for model in ['jinaai/jina-colbert-v2']):
-            raise ValueError(
-                'ColBERT reranking is not available in slim build. '
-                'Set RAG_RERANKING_ENGINE to "external" or clear RAG_RERANKING_MODEL.'
-            )
+            try:
+                from open_webui.retrieval.models.colbert import ColBERT
+
+                rf = ColBERT(
+                    get_model_path(reranking_model, auto_update),
+                    env='docker' if DOCKER else None,
+                )
+
+            except Exception as e:
+                log.error(f'ColBERT: {e}')
+                raise Exception(ERROR_MESSAGES.DEFAULT(e))
         else:
             if engine == 'external':
                 try:
@@ -179,10 +198,41 @@ def get_rf(
                     log.error(f'ExternalReranking: {e}')
                     raise Exception(ERROR_MESSAGES.DEFAULT(e))
             else:
-                raise ValueError(
-                    'Local reranking (sentence-transformers CrossEncoder) is not available in slim build. '
-                    'Set RAG_RERANKING_ENGINE to "external" or clear RAG_RERANKING_MODEL.'
-                )
+                import sentence_transformers
+                import torch
+
+                try:
+                    rf = sentence_transformers.CrossEncoder(
+                        get_model_path(reranking_model, auto_update),
+                        device=DEVICE_TYPE,
+                        trust_remote_code=RAG_RERANKING_MODEL_TRUST_REMOTE_CODE,
+                        backend=SENTENCE_TRANSFORMERS_CROSS_ENCODER_BACKEND,
+                        model_kwargs=SENTENCE_TRANSFORMERS_CROSS_ENCODER_MODEL_KWARGS,
+                        activation_fn=(
+                            torch.nn.Sigmoid()
+                            if SENTENCE_TRANSFORMERS_CROSS_ENCODER_SIGMOID_ACTIVATION_FUNCTION
+                            else None
+                        ),
+                    )
+                except Exception as e:
+                    log.error(f'CrossEncoder: {e}')
+                    raise Exception(ERROR_MESSAGES.DEFAULT('CrossEncoder error'))
+
+                # Safely adjust pad_token_id if missing as some models do not have this in config
+                try:
+                    model_cfg = getattr(rf, 'model', None)
+                    if model_cfg and hasattr(model_cfg, 'config'):
+                        cfg = model_cfg.config
+                        if getattr(cfg, 'pad_token_id', None) is None:
+                            # Fallback to eos_token_id when available
+                            eos = getattr(cfg, 'eos_token_id', None)
+                            if eos is not None:
+                                cfg.pad_token_id = eos
+                                log.debug(f'Missing pad_token_id detected; set to eos_token_id={eos}')
+                            else:
+                                log.warning('Neither pad_token_id nor eos_token_id present in model config')
+                except Exception as e2:
+                    log.warning(f'Failed to adjust pad_token_id on CrossEncoder: {e2}')
 
     return rf
 
@@ -238,6 +288,10 @@ async def get_embedding_config(request: Request, user=Depends(get_admin_user)):
             'url': request.app.state.config.RAG_OPENAI_API_BASE_URL,
             'key': request.app.state.config.RAG_OPENAI_API_KEY,
         },
+        'ollama_config': {
+            'url': request.app.state.config.RAG_OLLAMA_BASE_URL,
+            'key': request.app.state.config.RAG_OLLAMA_API_KEY,
+        },
         'azure_openai_config': {
             'url': request.app.state.config.RAG_AZURE_OPENAI_BASE_URL,
             'key': request.app.state.config.RAG_AZURE_OPENAI_API_KEY,
@@ -251,6 +305,11 @@ class OpenAIConfigForm(BaseModel):
     key: str
 
 
+class OllamaConfigForm(BaseModel):
+    url: str
+    key: str
+
+
 class AzureOpenAIConfigForm(BaseModel):
     url: str
     key: str
@@ -259,6 +318,7 @@ class AzureOpenAIConfigForm(BaseModel):
 
 class EmbeddingModelUpdateForm(BaseModel):
     openai_config: Optional[OpenAIConfigForm] = None
+    ollama_config: Optional[OllamaConfigForm] = None
     azure_openai_config: Optional[AzureOpenAIConfigForm] = None
     RAG_EMBEDDING_ENGINE: str
     RAG_EMBEDDING_MODEL: str
@@ -269,12 +329,17 @@ class EmbeddingModelUpdateForm(BaseModel):
 
 def unload_embedding_model(request: Request):
     if request.app.state.config.RAG_EMBEDDING_ENGINE == '':
-        # unloads current internal embedding model and clears cache
+        # unloads current internal embedding model and clears VRAM cache
         request.app.state.ef = None
         request.app.state.EMBEDDING_FUNCTION = None
         import gc
 
         gc.collect()
+        if DEVICE_TYPE == 'cuda':
+            import torch
+
+            if torch.cuda.is_available():
+                torch.cuda.empty_cache()
 
 
 @router.post('/embedding/update')
@@ -282,13 +347,6 @@ async def update_embedding_config(request: Request, form_data: EmbeddingModelUpd
     log.info(
         f'Updating embedding model: {request.app.state.config.RAG_EMBEDDING_MODEL} to {form_data.RAG_EMBEDDING_MODEL}'
     )
-
-    # Save current state so we can restore on failure
-    prev_ef = request.app.state.ef
-    prev_embedding_function = request.app.state.EMBEDDING_FUNCTION
-    prev_engine = request.app.state.config.RAG_EMBEDDING_ENGINE
-    prev_model = request.app.state.config.RAG_EMBEDDING_MODEL
-
     unload_embedding_model(request)
     try:
         request.app.state.config.RAG_EMBEDDING_ENGINE = form_data.RAG_EMBEDDING_ENGINE
@@ -298,12 +356,17 @@ async def update_embedding_config(request: Request, form_data: EmbeddingModelUpd
         request.app.state.config.RAG_EMBEDDING_CONCURRENT_REQUESTS = form_data.RAG_EMBEDDING_CONCURRENT_REQUESTS
 
         if request.app.state.config.RAG_EMBEDDING_ENGINE in [
+            'ollama',
             'openai',
             'azure_openai',
         ]:
             if form_data.openai_config is not None:
                 request.app.state.config.RAG_OPENAI_API_BASE_URL = form_data.openai_config.url
                 request.app.state.config.RAG_OPENAI_API_KEY = form_data.openai_config.key
+
+            if form_data.ollama_config is not None:
+                request.app.state.config.RAG_OLLAMA_BASE_URL = form_data.ollama_config.url
+                request.app.state.config.RAG_OLLAMA_API_KEY = form_data.ollama_config.key
 
             if form_data.azure_openai_config is not None:
                 request.app.state.config.RAG_AZURE_OPENAI_BASE_URL = form_data.azure_openai_config.url
@@ -322,12 +385,20 @@ async def update_embedding_config(request: Request, form_data: EmbeddingModelUpd
             (
                 request.app.state.config.RAG_OPENAI_API_BASE_URL
                 if request.app.state.config.RAG_EMBEDDING_ENGINE == 'openai'
-                else request.app.state.config.RAG_AZURE_OPENAI_BASE_URL
+                else (
+                    request.app.state.config.RAG_OLLAMA_BASE_URL
+                    if request.app.state.config.RAG_EMBEDDING_ENGINE == 'ollama'
+                    else request.app.state.config.RAG_AZURE_OPENAI_BASE_URL
+                )
             ),
             (
                 request.app.state.config.RAG_OPENAI_API_KEY
                 if request.app.state.config.RAG_EMBEDDING_ENGINE == 'openai'
-                else request.app.state.config.RAG_AZURE_OPENAI_API_KEY
+                else (
+                    request.app.state.config.RAG_OLLAMA_API_KEY
+                    if request.app.state.config.RAG_EMBEDDING_ENGINE == 'ollama'
+                    else request.app.state.config.RAG_AZURE_OPENAI_API_KEY
+                )
             ),
             request.app.state.config.RAG_EMBEDDING_BATCH_SIZE,
             azure_api_version=(
@@ -350,6 +421,10 @@ async def update_embedding_config(request: Request, form_data: EmbeddingModelUpd
                 'url': request.app.state.config.RAG_OPENAI_API_BASE_URL,
                 'key': request.app.state.config.RAG_OPENAI_API_KEY,
             },
+            'ollama_config': {
+                'url': request.app.state.config.RAG_OLLAMA_BASE_URL,
+                'key': request.app.state.config.RAG_OLLAMA_API_KEY,
+            },
             'azure_openai_config': {
                 'url': request.app.state.config.RAG_AZURE_OPENAI_BASE_URL,
                 'key': request.app.state.config.RAG_AZURE_OPENAI_API_KEY,
@@ -358,11 +433,6 @@ async def update_embedding_config(request: Request, form_data: EmbeddingModelUpd
         }
     except Exception as e:
         log.exception(f'Problem updating embedding model: {e}')
-        # Restore previous state so embedding stays functional
-        request.app.state.ef = prev_ef
-        request.app.state.EMBEDDING_FUNCTION = prev_embedding_function
-        request.app.state.config.RAG_EMBEDDING_ENGINE = prev_engine
-        request.app.state.config.RAG_EMBEDDING_MODEL = prev_model
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=ERROR_MESSAGES.DEFAULT(e),
@@ -410,6 +480,8 @@ async def get_rag_config(request: Request, user=Depends(get_admin_user)):
         'DOCUMENT_INTELLIGENCE_MODEL': request.app.state.config.DOCUMENT_INTELLIGENCE_MODEL,
         'MISTRAL_OCR_API_BASE_URL': request.app.state.config.MISTRAL_OCR_API_BASE_URL,
         'MISTRAL_OCR_API_KEY': request.app.state.config.MISTRAL_OCR_API_KEY,
+        'PADDLEOCR_VL_BASE_URL': request.app.state.config.PADDLEOCR_VL_BASE_URL,
+        'PADDLEOCR_VL_TOKEN': request.app.state.config.PADDLEOCR_VL_TOKEN,
         # MinerU settings
         'MINERU_API_MODE': request.app.state.config.MINERU_API_MODE,
         'MINERU_API_URL': request.app.state.config.MINERU_API_URL,
@@ -419,6 +491,7 @@ async def get_rag_config(request: Request, user=Depends(get_admin_user)):
         # Reranking settings
         'RAG_RERANKING_MODEL': request.app.state.config.RAG_RERANKING_MODEL,
         'RAG_RERANKING_ENGINE': request.app.state.config.RAG_RERANKING_ENGINE,
+        'RAG_RERANKING_BATCH_SIZE': request.app.state.config.RAG_RERANKING_BATCH_SIZE,
         'RAG_EXTERNAL_RERANKER_URL': request.app.state.config.RAG_EXTERNAL_RERANKER_URL,
         'RAG_EXTERNAL_RERANKER_API_KEY': request.app.state.config.RAG_EXTERNAL_RERANKER_API_KEY,
         'RAG_EXTERNAL_RERANKER_TIMEOUT': request.app.state.config.RAG_EXTERNAL_RERANKER_TIMEOUT,
@@ -449,6 +522,7 @@ async def get_rag_config(request: Request, user=Depends(get_admin_user)):
             'WEB_SEARCH_DOMAIN_FILTER_LIST': request.app.state.config.WEB_SEARCH_DOMAIN_FILTER_LIST,
             'BYPASS_WEB_SEARCH_EMBEDDING_AND_RETRIEVAL': request.app.state.config.BYPASS_WEB_SEARCH_EMBEDDING_AND_RETRIEVAL,
             'BYPASS_WEB_SEARCH_WEB_LOADER': request.app.state.config.BYPASS_WEB_SEARCH_WEB_LOADER,
+            'OLLAMA_CLOUD_WEB_SEARCH_API_KEY': request.app.state.config.OLLAMA_CLOUD_WEB_SEARCH_API_KEY,
             'SEARXNG_QUERY_URL': request.app.state.config.SEARXNG_QUERY_URL,
             'SEARXNG_LANGUAGE': request.app.state.config.SEARXNG_LANGUAGE,
             'YACY_QUERY_URL': request.app.state.config.YACY_QUERY_URL,
@@ -511,11 +585,12 @@ class WebConfig(BaseModel):
     WEB_SEARCH_TRUST_ENV: Optional[bool] = None
     WEB_SEARCH_RESULT_COUNT: Optional[int] = None
     WEB_SEARCH_CONCURRENT_REQUESTS: Optional[int] = None
+    WEB_SEARCH_DOMAIN_FILTER_LIST: Optional[List[str]] = []
     WEB_FETCH_MAX_CONTENT_LENGTH: Optional[int] = None
     WEB_LOADER_CONCURRENT_REQUESTS: Optional[int] = None
-    WEB_SEARCH_DOMAIN_FILTER_LIST: Optional[List[str]] = []
     BYPASS_WEB_SEARCH_EMBEDDING_AND_RETRIEVAL: Optional[bool] = None
     BYPASS_WEB_SEARCH_WEB_LOADER: Optional[bool] = None
+    OLLAMA_CLOUD_WEB_SEARCH_API_KEY: Optional[str] = None
     SEARXNG_QUERY_URL: Optional[str] = None
     SEARXNG_LANGUAGE: Optional[str] = None
     YACY_QUERY_URL: Optional[str] = None
@@ -613,6 +688,8 @@ class ConfigForm(BaseModel):
     DOCUMENT_INTELLIGENCE_MODEL: Optional[str] = None
     MISTRAL_OCR_API_BASE_URL: Optional[str] = None
     MISTRAL_OCR_API_KEY: Optional[str] = None
+    PADDLEOCR_VL_BASE_URL: Optional[str] = None
+    PADDLEOCR_VL_TOKEN: Optional[str] = None
 
     # MinerU settings
     MINERU_API_MODE: Optional[str] = None
@@ -624,6 +701,7 @@ class ConfigForm(BaseModel):
     # Reranking settings
     RAG_RERANKING_MODEL: Optional[str] = None
     RAG_RERANKING_ENGINE: Optional[str] = None
+    RAG_RERANKING_BATCH_SIZE: Optional[int] = None
     RAG_EXTERNAL_RERANKER_URL: Optional[str] = None
     RAG_EXTERNAL_RERANKER_API_KEY: Optional[str] = None
     RAG_EXTERNAL_RERANKER_TIMEOUT: Optional[str] = None
@@ -813,6 +891,16 @@ async def update_rag_config(request: Request, form_data: ConfigForm, user=Depend
         if form_data.MISTRAL_OCR_API_KEY is not None
         else request.app.state.config.MISTRAL_OCR_API_KEY
     )
+    request.app.state.config.PADDLEOCR_VL_BASE_URL = (
+        form_data.PADDLEOCR_VL_BASE_URL
+        if form_data.PADDLEOCR_VL_BASE_URL is not None
+        else request.app.state.config.PADDLEOCR_VL_BASE_URL
+    )
+    request.app.state.config.PADDLEOCR_VL_TOKEN = (
+        form_data.PADDLEOCR_VL_TOKEN
+        if form_data.PADDLEOCR_VL_TOKEN is not None
+        else request.app.state.config.PADDLEOCR_VL_TOKEN
+    )
 
     # MinerU settings
     request.app.state.config.MINERU_API_MODE = (
@@ -835,12 +923,17 @@ async def update_rag_config(request: Request, form_data: ConfigForm, user=Depend
 
     # Reranking settings
     if request.app.state.config.RAG_RERANKING_ENGINE == '':
-        # Unloading the internal reranker and clear memory
+        # Unloading the internal reranker and clear VRAM memory
         request.app.state.rf = None
         request.app.state.RERANKING_FUNCTION = None
         import gc
 
         gc.collect()
+        if DEVICE_TYPE == 'cuda':
+            import torch
+
+            if torch.cuda.is_available():
+                torch.cuda.empty_cache()
     request.app.state.config.RAG_RERANKING_ENGINE = (
         form_data.RAG_RERANKING_ENGINE
         if form_data.RAG_RERANKING_ENGINE is not None
@@ -863,6 +956,12 @@ async def update_rag_config(request: Request, form_data: ConfigForm, user=Depend
         form_data.RAG_EXTERNAL_RERANKER_TIMEOUT
         if form_data.RAG_EXTERNAL_RERANKER_TIMEOUT is not None
         else request.app.state.config.RAG_EXTERNAL_RERANKER_TIMEOUT
+    )
+
+    request.app.state.config.RAG_RERANKING_BATCH_SIZE = (
+        form_data.RAG_RERANKING_BATCH_SIZE
+        if form_data.RAG_RERANKING_BATCH_SIZE is not None
+        else request.app.state.config.RAG_RERANKING_BATCH_SIZE
     )
 
     log.info(
@@ -892,6 +991,7 @@ async def update_rag_config(request: Request, form_data: ConfigForm, user=Depend
                     request.app.state.config.RAG_RERANKING_ENGINE,
                     request.app.state.config.RAG_RERANKING_MODEL,
                     request.app.state.rf,
+                    reranking_batch_size=request.app.state.config.RAG_RERANKING_BATCH_SIZE,
                 )
         except Exception as e:
             log.error(f'Error loading reranking model: {e}')
@@ -972,6 +1072,7 @@ async def update_rag_config(request: Request, form_data: ConfigForm, user=Depend
             form_data.web.BYPASS_WEB_SEARCH_EMBEDDING_AND_RETRIEVAL
         )
         request.app.state.config.BYPASS_WEB_SEARCH_WEB_LOADER = form_data.web.BYPASS_WEB_SEARCH_WEB_LOADER
+        request.app.state.config.OLLAMA_CLOUD_WEB_SEARCH_API_KEY = form_data.web.OLLAMA_CLOUD_WEB_SEARCH_API_KEY
         request.app.state.config.SEARXNG_QUERY_URL = form_data.web.SEARXNG_QUERY_URL
         request.app.state.config.SEARXNG_LANGUAGE = form_data.web.SEARXNG_LANGUAGE
         request.app.state.config.YACY_QUERY_URL = form_data.web.YACY_QUERY_URL
@@ -1065,6 +1166,8 @@ async def update_rag_config(request: Request, form_data: ConfigForm, user=Depend
         'DOCUMENT_INTELLIGENCE_MODEL': request.app.state.config.DOCUMENT_INTELLIGENCE_MODEL,
         'MISTRAL_OCR_API_BASE_URL': request.app.state.config.MISTRAL_OCR_API_BASE_URL,
         'MISTRAL_OCR_API_KEY': request.app.state.config.MISTRAL_OCR_API_KEY,
+        'PADDLEOCR_VL_BASE_URL': request.app.state.config.PADDLEOCR_VL_BASE_URL,
+        'PADDLEOCR_VL_TOKEN': request.app.state.config.PADDLEOCR_VL_TOKEN,
         # MinerU settings
         'MINERU_API_MODE': request.app.state.config.MINERU_API_MODE,
         'MINERU_API_URL': request.app.state.config.MINERU_API_URL,
@@ -1099,11 +1202,12 @@ async def update_rag_config(request: Request, form_data: ConfigForm, user=Depend
             'WEB_SEARCH_TRUST_ENV': request.app.state.config.WEB_SEARCH_TRUST_ENV,
             'WEB_SEARCH_RESULT_COUNT': request.app.state.config.WEB_SEARCH_RESULT_COUNT,
             'WEB_SEARCH_CONCURRENT_REQUESTS': request.app.state.config.WEB_SEARCH_CONCURRENT_REQUESTS,
-            'FETCH_URL_MAX_CONTENT_LENGTH': request.app.state.config.FETCH_URL_MAX_CONTENT_LENGTH,
+            'WEB_FETCH_MAX_CONTENT_LENGTH': request.app.state.config.WEB_FETCH_MAX_CONTENT_LENGTH,
             'WEB_LOADER_CONCURRENT_REQUESTS': request.app.state.config.WEB_LOADER_CONCURRENT_REQUESTS,
             'WEB_SEARCH_DOMAIN_FILTER_LIST': request.app.state.config.WEB_SEARCH_DOMAIN_FILTER_LIST,
             'BYPASS_WEB_SEARCH_EMBEDDING_AND_RETRIEVAL': request.app.state.config.BYPASS_WEB_SEARCH_EMBEDDING_AND_RETRIEVAL,
             'BYPASS_WEB_SEARCH_WEB_LOADER': request.app.state.config.BYPASS_WEB_SEARCH_WEB_LOADER,
+            'OLLAMA_CLOUD_WEB_SEARCH_API_KEY': request.app.state.config.OLLAMA_CLOUD_WEB_SEARCH_API_KEY,
             'SEARXNG_QUERY_URL': request.app.state.config.SEARXNG_QUERY_URL,
             'SEARXNG_LANGUAGE': request.app.state.config.SEARXNG_LANGUAGE,
             'YACY_QUERY_URL': request.app.state.config.YACY_QUERY_URL,
@@ -1380,12 +1484,20 @@ def save_docs_to_vector_db(
             (
                 request.app.state.config.RAG_OPENAI_API_BASE_URL
                 if request.app.state.config.RAG_EMBEDDING_ENGINE == 'openai'
-                else request.app.state.config.RAG_AZURE_OPENAI_BASE_URL
+                else (
+                    request.app.state.config.RAG_OLLAMA_BASE_URL
+                    if request.app.state.config.RAG_EMBEDDING_ENGINE == 'ollama'
+                    else request.app.state.config.RAG_AZURE_OPENAI_BASE_URL
+                )
             ),
             (
                 request.app.state.config.RAG_OPENAI_API_KEY
                 if request.app.state.config.RAG_EMBEDDING_ENGINE == 'openai'
-                else request.app.state.config.RAG_AZURE_OPENAI_API_KEY
+                else (
+                    request.app.state.config.RAG_OLLAMA_API_KEY
+                    if request.app.state.config.RAG_EMBEDDING_ENGINE == 'ollama'
+                    else request.app.state.config.RAG_AZURE_OPENAI_API_KEY
+                )
             ),
             request.app.state.config.RAG_EMBEDDING_BATCH_SIZE,
             azure_api_version=(
@@ -1442,11 +1554,11 @@ class ProcessFileForm(BaseModel):
 
 
 @router.post('/process/file')
-def process_file(
+async def process_file(
     request: Request,
     form_data: ProcessFileForm,
     user=Depends(get_verified_user),
-    db: Session = Depends(get_session),
+    db: AsyncSession = Depends(get_async_session),
 ):
     """
     Process a file and save its content to the vector database.
@@ -1455,9 +1567,9 @@ def process_file(
     The session is committed before external API calls, and updates use a fresh session.
     """
     if user.role == 'admin':
-        file = Files.get_file_by_id(form_data.file_id, db=db)
+        file = await Files.get_file_by_id(form_data.file_id, db=db)
     else:
-        file = Files.get_file_by_id_and_user_id(form_data.file_id, user.id, db=db)
+        file = await Files.get_file_by_id_and_user_id(form_data.file_id, user.id, db=db)
 
     if file:
         try:
@@ -1472,7 +1584,7 @@ def process_file(
 
                 try:
                     # /files/{file_id}/data/content/update
-                    VECTOR_DB_CLIENT.delete_collection(collection_name=f'file-{file.id}')
+                    await ASYNC_VECTOR_DB_CLIENT.delete_collection(collection_name=f'file-{file.id}')
                 except Exception:
                     # Audio file upload pipeline
                     pass
@@ -1495,7 +1607,9 @@ def process_file(
                 # Check if the file has already been processed and save the content
                 # Usage: /knowledge/{id}/file/add, /knowledge/{id}/file/update
 
-                result = VECTOR_DB_CLIENT.query(collection_name=f'file-{file.id}', filter={'file_id': file.id})
+                result = await ASYNC_VECTOR_DB_CLIENT.query(
+                    collection_name=f'file-{file.id}', filter={'file_id': file.id}
+                )
 
                 if result is not None and len(result.ids[0]) > 0:
                     docs = [
@@ -1525,41 +1639,10 @@ def process_file(
                 # Usage: /files/
                 file_path = file.path
                 if file_path:
-                    file_path = Storage.get_file(file_path)
-                    loader = Loader(
-                        engine=request.app.state.config.CONTENT_EXTRACTION_ENGINE,
-                        user=user,
-                        DATALAB_MARKER_API_KEY=request.app.state.config.DATALAB_MARKER_API_KEY,
-                        DATALAB_MARKER_API_BASE_URL=request.app.state.config.DATALAB_MARKER_API_BASE_URL,
-                        DATALAB_MARKER_ADDITIONAL_CONFIG=request.app.state.config.DATALAB_MARKER_ADDITIONAL_CONFIG,
-                        DATALAB_MARKER_SKIP_CACHE=request.app.state.config.DATALAB_MARKER_SKIP_CACHE,
-                        DATALAB_MARKER_FORCE_OCR=request.app.state.config.DATALAB_MARKER_FORCE_OCR,
-                        DATALAB_MARKER_PAGINATE=request.app.state.config.DATALAB_MARKER_PAGINATE,
-                        DATALAB_MARKER_STRIP_EXISTING_OCR=request.app.state.config.DATALAB_MARKER_STRIP_EXISTING_OCR,
-                        DATALAB_MARKER_DISABLE_IMAGE_EXTRACTION=request.app.state.config.DATALAB_MARKER_DISABLE_IMAGE_EXTRACTION,
-                        DATALAB_MARKER_FORMAT_LINES=request.app.state.config.DATALAB_MARKER_FORMAT_LINES,
-                        DATALAB_MARKER_USE_LLM=request.app.state.config.DATALAB_MARKER_USE_LLM,
-                        DATALAB_MARKER_OUTPUT_FORMAT=request.app.state.config.DATALAB_MARKER_OUTPUT_FORMAT,
-                        EXTERNAL_DOCUMENT_LOADER_URL=request.app.state.config.EXTERNAL_DOCUMENT_LOADER_URL,
-                        EXTERNAL_DOCUMENT_LOADER_API_KEY=request.app.state.config.EXTERNAL_DOCUMENT_LOADER_API_KEY,
-                        TIKA_SERVER_URL=request.app.state.config.TIKA_SERVER_URL,
-                        DOCLING_SERVER_URL=request.app.state.config.DOCLING_SERVER_URL,
-                        DOCLING_API_KEY=request.app.state.config.DOCLING_API_KEY,
-                        DOCLING_PARAMS=request.app.state.config.DOCLING_PARAMS,
-                        PDF_EXTRACT_IMAGES=request.app.state.config.PDF_EXTRACT_IMAGES,
-                        PDF_LOADER_MODE=request.app.state.config.PDF_LOADER_MODE,
-                        DOCUMENT_INTELLIGENCE_ENDPOINT=request.app.state.config.DOCUMENT_INTELLIGENCE_ENDPOINT,
-                        DOCUMENT_INTELLIGENCE_KEY=request.app.state.config.DOCUMENT_INTELLIGENCE_KEY,
-                        DOCUMENT_INTELLIGENCE_MODEL=request.app.state.config.DOCUMENT_INTELLIGENCE_MODEL,
-                        MISTRAL_OCR_API_BASE_URL=request.app.state.config.MISTRAL_OCR_API_BASE_URL,
-                        MISTRAL_OCR_API_KEY=request.app.state.config.MISTRAL_OCR_API_KEY,
-                        MINERU_API_MODE=request.app.state.config.MINERU_API_MODE,
-                        MINERU_API_URL=request.app.state.config.MINERU_API_URL,
-                        MINERU_API_KEY=request.app.state.config.MINERU_API_KEY,
-                        MINERU_API_TIMEOUT=request.app.state.config.MINERU_API_TIMEOUT,
-                        MINERU_PARAMS=request.app.state.config.MINERU_PARAMS,
-                    )
-                    docs = loader.load(file.filename, file.meta.get('content_type'), file_path)
+                    file_path = await asyncio.to_thread(Storage.get_file, file_path)
+                    loader = build_loader_from_config(request)
+                    loader.user = user
+                    docs = await loader.aload(file.filename, file.meta.get('content_type'), file_path)
 
                     docs = [
                         Document(
@@ -1590,7 +1673,7 @@ def process_file(
                 text_content = ' '.join([doc.page_content for doc in docs])
 
             log.debug(f'text_content: {text_content}')
-            Files.update_file_data_by_id(
+            await Files.update_file_data_by_id(
                 file.id,
                 {'content': text_content},
                 db=db,
@@ -1598,8 +1681,8 @@ def process_file(
             hash = calculate_sha256_string(text_content)
 
             if request.app.state.config.BYPASS_EMBEDDING_AND_RETRIEVAL:
-                Files.update_file_data_by_id(file.id, {'status': 'completed'}, db=db)
-                Files.update_file_hash_by_id(file.id, hash, db=db)
+                await Files.update_file_data_by_id(file.id, {'status': 'completed'}, db=db)
+                await Files.update_file_hash_by_id(file.id, hash, db=db)
                 return {
                     'status': True,
                     'collection_name': None,
@@ -1610,11 +1693,16 @@ def process_file(
                 try:
                     # Commit any pending changes before the slow embedding step.
                     # Note: file is already a Pydantic model (not ORM), so no expunge needed.
-                    db.commit()
+                    await db.commit()
 
                     # External embedding API takes time (5-60s+).
-                    # Subsequent updates use fresh sessions via get_db().
-                    result = save_docs_to_vector_db(
+                    # Subsequent updates use fresh async sessions.
+                    # NOTE: save_docs_to_vector_db is a sync function that
+                    # calls asyncio.run_coroutine_threadsafe(..., main_loop).result()
+                    # which blocks the calling thread.  We MUST run it in a
+                    # worker thread to avoid deadlocking the event loop.
+                    result = await run_in_threadpool(
+                        save_docs_to_vector_db,
                         request,
                         docs=docs,
                         collection_name=collection_name,
@@ -1630,8 +1718,8 @@ def process_file(
 
                     if result:
                         # Fresh session for the final update.
-                        with get_db() as session:
-                            Files.update_file_metadata_by_id(
+                        async with get_async_db() as session:
+                            await Files.update_file_metadata_by_id(
                                 file.id,
                                 {
                                     'collection_name': collection_name,
@@ -1639,12 +1727,12 @@ def process_file(
                                 db=session,
                             )
 
-                            Files.update_file_data_by_id(
+                            await Files.update_file_data_by_id(
                                 file.id,
                                 {'status': 'completed'},
                                 db=session,
                             )
-                            Files.update_file_hash_by_id(file.id, hash, db=session)
+                            await Files.update_file_hash_by_id(file.id, hash, db=session)
 
                             return {
                                 'status': True,
@@ -1660,14 +1748,14 @@ def process_file(
         except Exception as e:
             log.exception(e)
             # Fresh session for error status update.
-            with get_db() as session:
-                Files.update_file_data_by_id(
+            async with get_async_db() as session:
+                await Files.update_file_data_by_id(
                     file.id,
                     {'status': 'failed'},
                     db=session,
                 )
                 # Clear the hash so the file can be re-uploaded after fixing the issue
-                Files.update_file_hash_by_id(file.id, None, db=session)
+                await Files.update_file_hash_by_id(file.id, None, db=session)
 
             if 'No pandoc was found' in str(e):
                 raise HTTPException(
@@ -1699,6 +1787,8 @@ async def process_text(
     collection_name = form_data.collection_name
     if collection_name is None:
         collection_name = calculate_sha256_string(form_data.content)
+    else:
+        await _validate_collection_access([collection_name], user, access_type='write')
 
     docs = [
         Document(
@@ -1740,6 +1830,8 @@ async def process_web(
             collection_name = form_data.collection_name
             if not collection_name:
                 collection_name = calculate_sha256_string(form_data.url)[:63]
+            else:
+                await _validate_collection_access([collection_name], user, access_type='write')
 
             if not request.app.state.config.BYPASS_WEB_SEARCH_EMBEDDING_AND_RETRIEVAL:
                 await run_in_threadpool(
@@ -1805,7 +1897,15 @@ def search_web(request: Request, engine: str, query: str, user=None) -> list[Sea
     """
 
     # TODO: add playwright to search the web
-    if engine == 'perplexity_search':
+    if engine == 'ollama_cloud':
+        return search_ollama_cloud(
+            'https://ollama.com',
+            request.app.state.config.OLLAMA_CLOUD_WEB_SEARCH_API_KEY,
+            query,
+            request.app.state.config.WEB_SEARCH_RESULT_COUNT,
+            request.app.state.config.WEB_SEARCH_DOMAIN_FILTER_LIST,
+        )
+    elif engine == 'perplexity_search':
         if request.app.state.config.PERPLEXITY_API_KEY:
             return search_perplexity_search(
                 request.app.state.config.PERPLEXITY_API_KEY,
@@ -2083,7 +2183,7 @@ async def process_web_search(request: Request, form_data: SearchForm, user=Depen
             detail=ERROR_MESSAGES.ACCESS_PROHIBITED,
         )
 
-    if user.role != 'admin' and not has_permission(
+    if user.role != 'admin' and not await has_permission(
         user.id, 'features.web_search', request.app.state.config.USER_PERMISSIONS
     ):
         raise HTTPException(
@@ -2235,32 +2335,20 @@ async def process_web_search(request: Request, form_data: SearchForm, user=Depen
         )
 
 
-def _validate_collection_access(collection_names: list[str], user) -> None:
+async def _validate_collection_access(collection_names: list[str], user, access_type: str = 'read') -> None:
     """
-    Prevent users from querying collections they don't own.
-    Enforces ownership on user-memory-* and file-* collections.
-    Admins bypass this check.
+    Raise 403 if the user lacks access to any of the requested collections.
+    Delegates to the shared filter_accessible_collections utility so the
+    access rules stay in one place.
     """
-    if user.role == 'admin':
-        return
-
-    for name in collection_names:
-        if name.startswith('user-memory-') and name != f'user-memory-{user.id}':
-            raise HTTPException(
-                status_code=status.HTTP_403_FORBIDDEN,
-                detail=ERROR_MESSAGES.ACCESS_PROHIBITED,
-            )
-        elif name.startswith('file-'):
-            file_id = name[len('file-') :]
-            if not has_access_to_file(
-                file_id=file_id,
-                access_type='read',
-                user=user,
-            ):
-                raise HTTPException(
-                    status_code=status.HTTP_403_FORBIDDEN,
-                    detail=ERROR_MESSAGES.ACCESS_PROHIBITED,
-                )
+    requested = set(collection_names)
+    allowed = await filter_accessible_collections(requested, user, access_type=access_type)
+    denied = requested - allowed
+    if denied:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail=ERROR_MESSAGES.ACCESS_PROHIBITED,
+        )
 
 
 class QueryDocForm(BaseModel):
@@ -2278,12 +2366,12 @@ async def query_doc_handler(
     form_data: QueryDocForm,
     user=Depends(get_verified_user),
 ):
-    _validate_collection_access([form_data.collection_name], user)
+    await _validate_collection_access([form_data.collection_name], user)
 
     try:
         if request.app.state.config.ENABLE_RAG_HYBRID_SEARCH and (form_data.hybrid is None or form_data.hybrid):
             collection_results = {}
-            collection_results[form_data.collection_name] = VECTOR_DB_CLIENT.get(
+            collection_results[form_data.collection_name] = await ASYNC_VECTOR_DB_CLIENT.get(
                 collection_name=form_data.collection_name
             )
             return await query_doc_with_hybrid_search(
@@ -2312,7 +2400,10 @@ async def query_doc_handler(
             query_embedding = await request.app.state.EMBEDDING_FUNCTION(
                 form_data.query, prefix=RAG_EMBEDDING_QUERY_PREFIX, user=user
             )
-            return query_doc(
+            # query_doc wraps a blocking VECTOR_DB_CLIENT.search call;
+            # offload so the request's event loop stays responsive.
+            return await asyncio.to_thread(
+                query_doc,
                 collection_name=form_data.collection_name,
                 query_embedding=query_embedding,
                 k=form_data.k if form_data.k else request.app.state.config.TOP_K,
@@ -2343,7 +2434,7 @@ async def query_collection_handler(
     form_data: QueryCollectionsForm,
     user=Depends(get_verified_user),
 ):
-    _validate_collection_access(form_data.collection_names, user)
+    await _validate_collection_access(form_data.collection_names, user)
 
     try:
         if request.app.state.config.ENABLE_RAG_HYBRID_SEARCH and (form_data.hybrid is None or form_data.hybrid):
@@ -2404,14 +2495,14 @@ class DeleteForm(BaseModel):
 
 
 @router.post('/delete')
-def delete_entries_from_collection(
+async def delete_entries_from_collection(
     form_data: DeleteForm,
     user=Depends(get_admin_user),
-    db: Session = Depends(get_session),
+    db: AsyncSession = Depends(get_async_session),
 ):
     try:
-        if VECTOR_DB_CLIENT.has_collection(collection_name=form_data.collection_name):
-            file = Files.get_file_by_id(form_data.file_id, db=db)
+        if await ASYNC_VECTOR_DB_CLIENT.has_collection(collection_name=form_data.collection_name):
+            file = await Files.get_file_by_id(form_data.file_id, db=db)
             if not file:
                 raise HTTPException(
                     status_code=status.HTTP_404_NOT_FOUND,
@@ -2419,26 +2510,50 @@ def delete_entries_from_collection(
                 )
             hash = file.hash
 
-            VECTOR_DB_CLIENT.delete(
+            # Refuse to issue a `filter={'hash': None}` query — the
+            # match semantics of a null filter value are
+            # backend-dependent (some backends ignore the key, some
+            # match every row whose metadata lacks `hash`) and risk
+            # deleting unrelated entries. Files without a hash are
+            # typically unprocessed / failed / legacy records that
+            # can't be targeted by hash anyway.
+            if hash is None:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail=ERROR_MESSAGES.DEFAULT('File has no hash; cannot delete vector entries by hash.'),
+                )
+
+            # Pre-existing bug: this used `metadata=` which is not a
+            # parameter on `VectorDBBase.delete` nor on any backend
+            # implementation, so the call always raised TypeError that
+            # was silently swallowed by the surrounding `except
+            # Exception` and the endpoint reported `{'status': False}`
+            # for every request. Use `filter` to actually do what the
+            # endpoint name promises.
+            await ASYNC_VECTOR_DB_CLIENT.delete(
                 collection_name=form_data.collection_name,
-                metadata={'hash': hash},
+                filter={'hash': hash},
             )
             return {'status': True}
         else:
             return {'status': False}
+    except HTTPException:
+        # Caller-meaningful errors (404/400 above) must not be
+        # swallowed and re-shaped as `{'status': False}`.
+        raise
     except Exception as e:
         log.exception(e)
         return {'status': False}
 
 
 @router.post('/reset/db')
-def reset_vector_db(user=Depends(get_admin_user), db: Session = Depends(get_session)):
-    VECTOR_DB_CLIENT.reset()
-    Knowledges.delete_all_knowledge(db=db)
+async def reset_vector_db(user=Depends(get_admin_user), db: AsyncSession = Depends(get_async_session)):
+    await ASYNC_VECTOR_DB_CLIENT.reset()
+    await Knowledges.delete_all_knowledge(db=db)
 
 
 @router.post('/reset/uploads')
-def reset_upload_dir(user=Depends(get_admin_user)) -> bool:
+async def reset_upload_dir(user=Depends(get_admin_user)) -> bool:
     folder = f'{UPLOAD_DIR}'
     try:
         # Check if the directory exists
@@ -2488,11 +2603,12 @@ async def process_files_batch(
     request: Request,
     form_data: BatchProcessFilesForm,
     user=Depends(get_verified_user),
+    db=None,
 ) -> BatchProcessFilesResponse:
     """
     Process a batch of files and save them to the vector database.
 
-    NOTE: We intentionally do NOT use Depends(get_session) here.
+    NOTE: We intentionally do NOT use Depends(get_async_session) here.
     The save_docs_to_vector_db() call makes external embedding API calls which
     can take 5-60+ seconds for batch operations. Database operations after
     embedding (Files.update_file_by_id) manage their own short-lived sessions.
@@ -2510,7 +2626,7 @@ async def process_files_batch(
     for file in form_data.files:
         try:
             # Ownership check: verify the requesting user owns the file or is an admin
-            db_file = Files.get_file_by_id(file.id)
+            db_file = await Files.get_file_by_id(file.id, db=db)
             if not db_file:
                 file_errors.append(
                     BatchProcessFilesResult(
@@ -2572,7 +2688,7 @@ async def process_files_batch(
 
             # Update all files with collection name
             for file_update, file_result in zip(file_updates, file_results):
-                Files.update_file_by_id(id=file_result.file_id, form_data=file_update)
+                await Files.update_file_by_id(id=file_result.file_id, form_data=file_update, db=db)
                 file_result.status = 'completed'
 
         except Exception as e:

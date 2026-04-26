@@ -101,6 +101,9 @@ RUN apt-get update && \
 # install python dependencies (slim: no torch, no model downloads)
 COPY --chown=$UID:$GID ./backend/requirements.txt ./requirements.txt
 
+# Set UV_LINK_MODE to copy to prevent 0-byte file corruption in QEMU arm64 cross-builds
+ENV UV_LINK_MODE=copy
+
 RUN set -e; \
     pip3 install --no-cache-dir uv; \
     uv pip install --system -r requirements.txt --no-cache-dir; \

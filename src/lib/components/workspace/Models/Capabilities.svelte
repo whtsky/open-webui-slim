@@ -27,6 +27,16 @@
 			label: $i18n.t('Image Generation'),
 			description: $i18n.t('Model can generate images based on text prompts')
 		},
+		code_interpreter: {
+			label: $i18n.t('Code Interpreter'),
+			description: $i18n.t('Model can execute code and perform calculations')
+		},
+		terminal: {
+			label: $i18n.t('Terminal'),
+			description: $i18n.t(
+				'Model can access Open Terminal for command execution and file management'
+			)
+		},
 		usage: {
 			label: $i18n.t('Usage'),
 			description: $i18n.t(
@@ -55,6 +65,8 @@
 		file_upload?: boolean;
 		web_search?: boolean;
 		image_generation?: boolean;
+		code_interpreter?: boolean;
+		terminal?: boolean;
 		usage?: boolean;
 		citations?: boolean;
 		status_updates?: boolean;

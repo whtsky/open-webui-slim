@@ -19,9 +19,17 @@
 			label: $i18n.t('Chat History'),
 			description: $i18n.t('Search and view user chat history')
 		},
+		notes: {
+			label: $i18n.t('Notes'),
+			description: $i18n.t('Search, view, and manage user notes')
+		},
 		knowledge: {
 			label: $i18n.t('Knowledge Base'),
 			description: $i18n.t('Browse and query knowledge bases')
+		},
+		channels: {
+			label: $i18n.t('Channels'),
+			description: $i18n.t('Search channels and channel messages')
 		},
 		web_search: {
 			label: $i18n.t('Web Search'),
@@ -30,21 +38,28 @@
 		image_generation: {
 			label: $i18n.t('Image Generation'),
 			description: $i18n.t('Generate and edit images')
+		},
+		code_interpreter: {
+			label: $i18n.t('Code Interpreter'),
+			description: $i18n.t('Execute code')
+		},
+		tasks: {
+			label: $i18n.t('Task Management'),
+			description: $i18n.t('Break down complex requests into trackable steps')
+		},
+		automations: {
+			label: $i18n.t('Automations'),
+			description: $i18n.t('Create and manage scheduled automations')
+		},
+		calendar: {
+			label: $i18n.t('Calendar'),
+			description: $i18n.t('List calendars, search, create, update, and delete calendar events')
 		}
 	};
 
 	const allTools = Object.keys(toolLabels);
 
 	export let builtinTools: Record<string, boolean> = {};
-
-	// Initialize missing keys to true (default enabled)
-	$: {
-		for (const tool of allTools) {
-			if (!(tool in builtinTools)) {
-				builtinTools[tool] = true;
-			}
-		}
-	}
 </script>
 
 <div>
@@ -57,10 +72,12 @@
 				<Checkbox
 					state={builtinTools[tool] !== false ? 'checked' : 'unchecked'}
 					on:change={(e) => {
-						builtinTools = {
-							...builtinTools,
-							[tool]: e.detail === 'checked'
-						};
+						if (e.detail === 'checked') {
+							delete builtinTools[tool];
+						} else {
+							builtinTools[tool] = false;
+						}
+						builtinTools = builtinTools;
 					}}
 				/>
 

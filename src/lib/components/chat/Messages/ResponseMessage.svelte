@@ -11,7 +11,19 @@
 
 	const dispatch = createEventDispatcher();
 
-	import { audioQueue, config, models, settings, TTSWorker, user } from '$lib/stores';
+	import { createNewFeedback, getFeedbackById, updateFeedbackById } from '$lib/apis/evaluations';
+	import { getChatById } from '$lib/apis/chats';
+	import { generateTags } from '$lib/apis';
+
+	import {
+		audioQueue,
+		config,
+		models,
+		settings,
+		temporaryChatEnabled,
+		TTSWorker,
+		user
+	} from '$lib/stores';
 	import { synthesizeOpenAISpeech } from '$lib/apis/audio';
 	import { imageGenerations } from '$lib/apis/images';
 	import {
@@ -19,17 +31,21 @@
 		approximateToHumanReadable,
 		getMessageContentParts,
 		sanitizeResponseContent,
+		createMessagesList,
 		formatDate,
 		removeDetails,
 		removeAllDetails
 	} from '$lib/utils';
-	import { WEBUI_API_BASE_URL } from '$lib/constants';
+	import { WEBUI_API_BASE_URL, WEBUI_BASE_URL } from '$lib/constants';
+	import equal from 'fast-deep-equal';
 
 	import Name from './Name.svelte';
 	import ProfileImage from './ProfileImage.svelte';
 	import Skeleton from './Skeleton.svelte';
 	import Image from '$lib/components/common/Image.svelte';
 	import Tooltip from '$lib/components/common/Tooltip.svelte';
+	import RateComment from './RateComment.svelte';
+	import Spinner from '$lib/components/common/Spinner.svelte';
 	import WebSearchResults from './ResponseMessage/WebSearchResults.svelte';
 	import Sparkles from '$lib/components/icons/Sparkles.svelte';
 
@@ -37,6 +53,7 @@
 
 	import Error from './Error.svelte';
 	import Citations from './Citations.svelte';
+	import CodeExecutions from './CodeExecutions.svelte';
 	import ContentRenderer from './ContentRenderer.svelte';
 	import { KokoroWorker } from '$lib/workers/KokoroWorker';
 	import FileItem from '$lib/components/common/FileItem.svelte';
@@ -71,6 +88,17 @@
 		done: boolean;
 		error?: boolean | { content: string };
 		sources?: string[];
+		code_executions?: {
+			uuid: string;
+			name: string;
+			code: string;
+			language?: string;
+			result?: {
+				error?: string;
+				output?: string;
+				files?: { name: string; url: string }[];
+			};
+		}[];
 		info?: {
 			openai?: boolean;
 			prompt_tokens?: number;
@@ -100,7 +128,7 @@
 			// Avoids 2x O(n) JSON.stringify calls that are always true during streaming anyway
 			if (message.content !== source.content || message.done !== source.done) {
 				message = structuredClone(source);
-			} else if (JSON.stringify(message) !== JSON.stringify(source)) {
+			} else if (!equal(message, source)) {
 				// Slow path: full comparison for infrequent changes (sources, annotations, status, etc.)
 				message = structuredClone(source);
 			}
@@ -157,6 +185,9 @@
 	let speakingIdx: number | undefined;
 
 	let loadingSpeech = false;
+	let speakAbort: AbortController | null = null;
+
+	let showRateComment = false;
 
 	const copyToClipboard = async (text) => {
 		text = removeAllDetails(text);
@@ -172,16 +203,25 @@
 	};
 
 	const stopAudio = () => {
+		speakAbort?.abort();
+		speakAbort = null;
+
 		try {
 			speechSynthesis.cancel();
 			$audioQueue?.stop();
 		} catch {}
 
-		if (speaking) {
-			speaking = false;
-			speakingIdx = undefined;
-		}
+		speaking = false;
+		speakingIdx = undefined;
+		loadingSpeech = false;
 	};
+
+	// Resolve voice: model-specific > user settings > config default
+	const getVoiceId = () =>
+		model?.info?.meta?.tts?.voice ??
+		($settings?.audio?.tts?.defaultVoice === $config.audio.tts.voice
+			? ($settings?.audio?.tts?.voice ?? $config?.audio?.tts?.voice)
+			: $config?.audio?.tts?.voice);
 
 	const speak = async () => {
 		if (!(message?.content ?? '').trim().length) {
@@ -189,21 +229,12 @@
 			return;
 		}
 
+		stopAudio();
+		speakAbort = new AbortController();
+		const { signal } = speakAbort;
+
 		speaking = true;
 		const content = removeAllDetails(message.content);
-
-		// Get voice: model-specific > user settings > config default
-		const getVoiceId = () => {
-			// Check for model-specific TTS voice first
-			if (model?.info?.meta?.tts?.voice) {
-				return model.info.meta.tts.voice;
-			}
-			// Fall back to user settings or config default
-			if ($settings?.audio?.tts?.defaultVoice === $config.audio.tts.voice) {
-				return $settings?.audio?.tts?.voice ?? $config?.audio?.tts?.voice;
-			}
-			return $config?.audio?.tts?.voice;
-		};
 
 		if ($config.audio.tts.engine === '') {
 			let voices = [];
@@ -212,15 +243,9 @@
 				if (voices.length > 0) {
 					clearInterval(getVoicesLoop);
 
-					const voiceId = getVoiceId();
-					const voice = voices?.filter((v) => v.voiceURI === voiceId)?.at(0) ?? undefined;
-
-					console.log(voice);
-
+					const voice = voices.find((v) => v.voiceURI === getVoiceId());
 					const speech = new SpeechSynthesisUtterance(content);
 					speech.rate = $settings.audio?.tts?.playbackRate ?? 1;
-
-					console.log(speech);
 
 					speech.onend = () => {
 						speaking = false;
@@ -251,9 +276,7 @@
 			);
 
 			if (!messageContentParts.length) {
-				console.log('No content to speak');
 				toast.info($i18n.t('No content to speak'));
-
 				speaking = false;
 				loadingSpeech = false;
 				return;
@@ -273,19 +296,19 @@
 					await $TTSWorker.init();
 				}
 
-				for (const [idx, sentence] of messageContentParts.entries()) {
+				for (const [, sentence] of messageContentParts.entries()) {
+					if (signal.aborted) return;
+
 					const url = await $TTSWorker
-						.generate({
-							text: sentence,
-							voice: voiceId
-						})
+						.generate({ text: sentence, voice: voiceId })
 						.catch((error) => {
 							console.error(error);
 							toast.error(`${error}`);
-
 							speaking = false;
 							loadingSpeech = false;
 						});
+
+					if (signal.aborted) return;
 
 					if (url && speaking) {
 						$audioQueue.enqueue(url);
@@ -293,21 +316,23 @@
 					}
 				}
 			} else {
-				for (const [idx, sentence] of messageContentParts.entries()) {
+				for (const [, sentence] of messageContentParts.entries()) {
+					if (signal.aborted) return;
+
 					const res = await synthesizeOpenAISpeech(localStorage.token, voiceId, sentence).catch(
 						(error) => {
 							console.error(error);
 							toast.error(`${error}`);
-
 							speaking = false;
 							loadingSpeech = false;
 						}
 					);
 
+					if (signal.aborted) return;
+
 					if (res && speaking) {
 						const blob = await res.blob();
 						const url = URL.createObjectURL(blob);
-
 						$audioQueue.enqueue(url);
 						loadingSpeech = false;
 					}
@@ -384,6 +409,126 @@
 		edit = false;
 		editedContent = '';
 		await tick();
+	};
+
+	let feedbackLoading = false;
+
+	const feedbackHandler = async (rating: number | null = null, details: object | null = null) => {
+		feedbackLoading = true;
+		console.log('Feedback', rating, details);
+
+		const updatedMessage = {
+			...message,
+			annotation: {
+				...(message?.annotation ?? {}),
+				...(rating !== null ? { rating: rating } : {}),
+				...(details ? details : {})
+			}
+		};
+
+		const chat = await getChatById(localStorage.token, chatId).catch((error) => {
+			toast.error(`${error}`);
+		});
+		if (!chat) {
+			return;
+		}
+
+		const messages = createMessagesList(history, message.id);
+
+		let feedbackItem = {
+			type: 'rating',
+			data: {
+				...(updatedMessage?.annotation ? updatedMessage.annotation : {}),
+				model_id: message?.selectedModelId ?? message.model,
+				...(history.messages[message.parentId].childrenIds.length > 1
+					? {
+							sibling_model_ids: history.messages[message.parentId].childrenIds
+								.filter((id) => id !== message.id)
+								.map((id) => history.messages[id]?.selectedModelId ?? history.messages[id].model)
+						}
+					: {})
+			},
+			meta: {
+				arena: message ? message.arena : false,
+				model_id: message.model,
+				message_id: message.id,
+				message_index: messages.length,
+				chat_id: chatId
+			},
+			snapshot: {
+				chat: chat
+			}
+		};
+
+		const baseModels = [
+			feedbackItem.data.model_id,
+			...(feedbackItem.data.sibling_model_ids ?? [])
+		].reduce((acc, modelId) => {
+			const model = $models.find((m) => m.id === modelId);
+			if (model) {
+				acc[model.id] = model?.info?.base_model_id ?? null;
+			} else {
+				// Log or handle cases where corresponding model is not found
+				console.warn(`Model with ID ${modelId} not found`);
+			}
+			return acc;
+		}, {});
+		feedbackItem.meta.base_models = baseModels;
+
+		let feedback = null;
+		if (message?.feedbackId) {
+			feedback = await updateFeedbackById(
+				localStorage.token,
+				message.feedbackId,
+				feedbackItem
+			).catch((error) => {
+				toast.error(`${error}`);
+			});
+		} else {
+			feedback = await createNewFeedback(localStorage.token, feedbackItem).catch((error) => {
+				toast.error(`${error}`);
+			});
+
+			if (feedback) {
+				updatedMessage.feedbackId = feedback.id;
+			}
+		}
+
+		console.log(updatedMessage);
+		saveMessage(message.id, updatedMessage);
+
+		await tick();
+
+		if (!details) {
+			showRateComment = true;
+
+			if (!updatedMessage.annotation?.tags && (message?.content ?? '') !== '') {
+				// attempt to generate tags
+				const tags = await generateTags(localStorage.token, message.model, messages, chatId).catch(
+					(error) => {
+						console.error(error);
+						return [];
+					}
+				);
+				console.log(tags);
+
+				if (tags) {
+					updatedMessage.annotation.tags = tags;
+					feedbackItem.data.tags = tags;
+
+					saveMessage(message.id, updatedMessage);
+					await updateFeedbackById(
+						localStorage.token,
+						updatedMessage.feedbackId,
+						feedbackItem
+					).catch((error) => {
+						toast.error(`${error}`);
+					});
+				}
+			}
+		}
+
+		feedbackLoading = false;
 	};
 
 	const deleteMessageHandler = async () => {
@@ -643,9 +788,6 @@
 								<!-- unless message.error === true which is legacy error handling, where the error message is stored in message.content -->
 								<ContentRenderer
 									id={`${chatId}-${message.id}`}
-									messageId={message.id}
-									{history}
-									{selectedModels}
 									content={message.content}
 									sources={message.sources}
 									floatingButtons={message?.done &&
@@ -669,8 +811,8 @@
 											citationsElement?.showSourceModal(id);
 										}
 									}}
-									onAddMessages={({ modelId, parentId, messages }) => {
-										addMessages({ modelId, parentId, messages });
+									onSetInputText={(text) => {
+										setInputText(text);
 									}}
 									onSave={({ raw, oldContent, newContent }) => {
 										history.messages[message.id].content = history.messages[
@@ -694,6 +836,10 @@
 									sources={message?.sources ?? message?.citations}
 									{readOnly}
 								/>
+							{/if}
+
+							{#if message.code_executions}
+								<CodeExecutions codeExecutions={message.code_executions} />
 							{/if}
 						</div>
 					</div>
@@ -996,6 +1142,84 @@
 								{/if}
 
 								{#if !readOnly}
+									{#if !$temporaryChatEnabled && ($config?.features.enable_message_rating ?? true) && ($user?.role === 'admin' || ($user?.permissions?.chat?.rate_response ?? true))}
+										<Tooltip content={$i18n.t('Good Response')} placement="bottom">
+											<button
+												aria-label={$i18n.t('Good Response')}
+												class="{isLastMessage || ($settings?.highContrastMode ?? false)
+													? 'visible'
+													: 'invisible group-hover:visible'} p-1.5 hover:bg-black/5 dark:hover:bg-white/5 rounded-lg {(
+													message?.annotation?.rating ?? ''
+												).toString() === '1'
+													? 'bg-gray-100 dark:bg-gray-800'
+													: ''} dark:hover:text-white hover:text-black transition disabled:cursor-progress disabled:hover:bg-transparent"
+												disabled={feedbackLoading}
+												on:click={async () => {
+													await feedbackHandler(1);
+													window.setTimeout(() => {
+														document
+															.getElementById(`message-feedback-${message.id}`)
+															?.scrollIntoView();
+													}, 0);
+												}}
+											>
+												<svg
+													aria-hidden="true"
+													stroke="currentColor"
+													fill="none"
+													stroke-width="2.3"
+													viewBox="0 0 24 24"
+													stroke-linecap="round"
+													stroke-linejoin="round"
+													class="w-4 h-4"
+													xmlns="http://www.w3.org/2000/svg"
+												>
+													<path
+														d="M14 9V5a3 3 0 0 0-3-3l-4 9v11h11.28a2 2 0 0 0 2-1.7l1.38-9a2 2 0 0 0-2-2.3zM7 22H4a2 2 0 0 1-2-2v-7a2 2 0 0 1 2-2h3"
+													/>
+												</svg>
+											</button>
+										</Tooltip>
+
+										<Tooltip content={$i18n.t('Bad Response')} placement="bottom">
+											<button
+												aria-label={$i18n.t('Bad Response')}
+												class="{isLastMessage || ($settings?.highContrastMode ?? false)
+													? 'visible'
+													: 'invisible group-hover:visible'} p-1.5 hover:bg-black/5 dark:hover:bg-white/5 rounded-lg {(
+													message?.annotation?.rating ?? ''
+												).toString() === '-1'
+													? 'bg-gray-100 dark:bg-gray-800'
+													: ''} dark:hover:text-white hover:text-black transition disabled:cursor-progress disabled:hover:bg-transparent"
+												disabled={feedbackLoading}
+												on:click={async () => {
+													await feedbackHandler(-1);
+													window.setTimeout(() => {
+														document
+															.getElementById(`message-feedback-${message.id}`)
+															?.scrollIntoView();
+													}, 0);
+												}}
+											>
+												<svg
+													aria-hidden="true"
+													stroke="currentColor"
+													fill="none"
+													stroke-width="2.3"
+													viewBox="0 0 24 24"
+													stroke-linecap="round"
+													stroke-linejoin="round"
+													class="w-4 h-4"
+													xmlns="http://www.w3.org/2000/svg"
+												>
+													<path
+														d="M10 15v4a3 3 0 0 0 3 3l4-9V2H5.72a2 2 0 0 0-2 1.7l-1.38 9a2 2 0 0 0 2 2.3zm7-13h2.67A2.31 2.31 0 0 1 22 4v7a2.31 2.31 0 0 1-2.33 2H17"
+													/>
+												</svg>
+											</button>
+										</Tooltip>
+									{/if}
+
 									{#if isLastMessage && ($user?.role === 'admin' || ($user?.permissions?.chat?.continue_response ?? true))}
 										<Tooltip content={$i18n.t('Continue Response')} placement="bottom">
 											<button
@@ -1039,6 +1263,7 @@
 												type="button"
 												class="hidden regenerate-response-button"
 												on:click={() => {
+													showRateComment = false;
 													regenerateResponse(message);
 
 													(model?.actions ?? []).forEach((action) => {
@@ -1057,6 +1282,7 @@
 
 											<RegenerateMenu
 												onRegenerate={(prompt = null) => {
+													showRateComment = false;
 													regenerateResponse(message, prompt);
 
 													(model?.actions ?? []).forEach((action) => {
@@ -1106,6 +1332,7 @@
 														? 'visible'
 														: 'invisible group-hover:visible'} p-1.5 hover:bg-black/5 dark:hover:bg-white/5 rounded-lg dark:hover:text-white hover:text-black transition regenerate-response-button"
 													on:click={() => {
+														showRateComment = false;
 														regenerateResponse(message);
 
 														(model?.actions ?? []).forEach((action) => {
@@ -1151,8 +1378,12 @@
 													class="{isLastMessage || ($settings?.highContrastMode ?? false)
 														? 'visible'
 														: 'invisible group-hover:visible'} p-1.5 hover:bg-black/5 dark:hover:bg-white/5 rounded-lg dark:hover:text-white hover:text-black transition"
-													on:click={() => {
-														showDeleteConfirm = true;
+													on:click={(e) => {
+														if (e.shiftKey) {
+															deleteMessageHandler();
+														} else {
+															showDeleteConfirm = true;
+														}
 													}}
 												>
 													<svg
@@ -1196,6 +1427,7 @@
 																: ''}"
 															style="fill: currentColor;"
 															alt={action.name}
+															draggable="false"
 														/>
 													</div>
 												{:else}
@@ -1208,6 +1440,18 @@
 							{/if}
 						{/if}
 					</div>
+
+					{#if message.done && showRateComment}
+						<RateComment
+							bind:message
+							bind:show={showRateComment}
+							on:save={async (e) => {
+								await feedbackHandler(null, {
+									...e.detail
+								});
+							}}
+						/>
+					{/if}
 
 					{#if (isLastMessage || ($settings?.keepFollowUpPrompts ?? false)) && message.done && !readOnly && (message?.followUps ?? []).length > 0}
 						<div class="mt-2.5" in:fade={{ duration: 100 }}>

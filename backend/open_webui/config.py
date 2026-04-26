@@ -1,3 +1,4 @@
+import asyncio
 import json
 import logging
 import os
@@ -35,7 +36,7 @@ from open_webui.env import (
     WEBUI_NAME,
     log,
 )
-from open_webui.internal.db import Base, get_db
+from open_webui.internal.db import Base, get_db, get_async_db
 from open_webui.utils.redis import get_redis_connection
 
 
@@ -90,6 +91,7 @@ def load_json_config():
 
 
 def save_to_db(data):
+    """Sync save — used ONLY at startup/import time."""
     with get_db() as db:
         existing_config = db.query(Config).first()
         if not existing_config:
@@ -102,10 +104,37 @@ def save_to_db(data):
         db.commit()
 
 
+async def async_save_to_db(data):
+    """Async save — used for ALL runtime config persistence."""
+    from sqlalchemy import select
+
+    async with get_async_db() as db:
+        result = await db.execute(select(Config).limit(1))
+        existing_config = result.scalars().first()
+        if not existing_config:
+            new_config = Config(data=data, version=0)
+            db.add(new_config)
+        else:
+            existing_config.data = data
+            existing_config.updated_at = datetime.now()
+            db.add(existing_config)
+        await db.commit()
+
+
 def reset_config():
+    """Sync reset — used ONLY at startup."""
     with get_db() as db:
         db.query(Config).delete()
         db.commit()
+
+
+async def async_reset_config():
+    """Async reset — used at runtime."""
+    from sqlalchemy import delete as sa_delete
+
+    async with get_async_db() as db:
+        await db.execute(sa_delete(Config))
+        await db.commit()
 
 
 # When initializing, check if config.json exists and migrate it to the database
@@ -144,10 +173,28 @@ PERSISTENT_CONFIG_REGISTRY = []
 
 
 def save_config(config):
+    """Sync save — used ONLY at startup/import time."""
     global CONFIG_DATA
     global PERSISTENT_CONFIG_REGISTRY
     try:
         save_to_db(config)
+        CONFIG_DATA = config
+
+        # Trigger updates on all registered PersistentConfig entries
+        for config_item in PERSISTENT_CONFIG_REGISTRY:
+            config_item.update()
+    except Exception as e:
+        log.exception(e)
+        return False
+    return True
+
+
+async def async_save_config(config):
+    """Async save — used for ALL runtime config persistence."""
+    global CONFIG_DATA
+    global PERSISTENT_CONFIG_REGISTRY
+    try:
+        await async_save_to_db(config)
         CONFIG_DATA = config
 
         # Trigger updates on all registered PersistentConfig entries
@@ -202,6 +249,7 @@ class PersistentConfig(Generic[T]):
             log.info(f'Updated {self.env_name} to new value {self.value}')
 
     def save(self):
+        """Sync save — used ONLY at startup/import time."""
         log.info(f"Saving '{self.env_name}' to the database")
         path_parts = self.config_path.split('.')
         sub_config = CONFIG_DATA
@@ -211,6 +259,19 @@ class PersistentConfig(Generic[T]):
             sub_config = sub_config[key]
         sub_config[path_parts[-1]] = self.value
         save_to_db(CONFIG_DATA)
+        self.config_value = self.value
+
+    async def async_save(self):
+        """Async save — used for ALL runtime config persistence."""
+        log.info(f"Saving '{self.env_name}' to the database")
+        path_parts = self.config_path.split('.')
+        sub_config = CONFIG_DATA
+        for key in path_parts[:-1]:
+            if key not in sub_config:
+                sub_config[key] = {}
+            sub_config = sub_config[key]
+        sub_config[path_parts[-1]] = self.value
+        await async_save_to_db(CONFIG_DATA)
         self.config_value = self.value
 
 
@@ -246,11 +307,26 @@ class AppConfig:
             self._state[key] = value
         else:
             self._state[key].value = value
-            self._state[key].save()
+
+            # At runtime (inside the event loop) persist via the async engine
+            # to avoid blocking the loop and contending with the async DB pool.
+            # At startup/import time, fall back to sync.
+            try:
+                loop = asyncio.get_running_loop()
+                loop.create_task(self._async_persist(key))
+            except RuntimeError:
+                self._state[key].save()
 
             if self._redis and ENABLE_PERSISTENT_CONFIG:
                 redis_key = f'{self._redis_key_prefix}:config:{key}'
                 self._redis.set(redis_key, json.dumps(self._state[key].value))
+
+    async def _async_persist(self, key):
+        """Persist a single config key via the async engine."""
+        try:
+            await self._state[key].async_save()
+        except Exception as e:
+            log.error(f'Failed to async-persist config key {key}: {e}')
 
     def __getattr__(self, key):
         if key not in self._state:
@@ -687,7 +763,6 @@ def load_oauth_providers():
             return client
 
         OAUTH_PROVIDERS['google'] = {
-            'redirect_uri': GOOGLE_REDIRECT_URI.value,
             'register': google_oauth_register,
         }
 
@@ -708,7 +783,6 @@ def load_oauth_providers():
             return client
 
         OAUTH_PROVIDERS['microsoft'] = {
-            'redirect_uri': MICROSOFT_REDIRECT_URI.value,
             'picture_url': MICROSOFT_CLIENT_PICTURE_URL.value,
             'register': microsoft_oauth_register,
         }
@@ -733,7 +807,6 @@ def load_oauth_providers():
             return client
 
         OAUTH_PROVIDERS['github'] = {
-            'redirect_uri': GITHUB_CLIENT_REDIRECT_URI.value,
             'register': github_oauth_register,
             'sub_claim': 'id',
         }
@@ -775,7 +848,6 @@ def load_oauth_providers():
 
         OAUTH_PROVIDERS['oidc'] = {
             'name': OAUTH_PROVIDER_NAME.value,
-            'redirect_uri': OPENID_REDIRECT_URI.value,
             'register': oidc_oauth_register,
         }
 
@@ -919,6 +991,7 @@ if CUSTOM_NAME:
 ####################################
 
 STORAGE_PROVIDER = os.environ.get('STORAGE_PROVIDER', 'local')  # defaults to local, s3
+STORAGE_LOCAL_CACHE = os.environ.get('STORAGE_LOCAL_CACHE', 'true').lower() == 'true'
 
 S3_ACCESS_KEY_ID = os.environ.get('S3_ACCESS_KEY_ID', None)
 S3_SECRET_ACCESS_KEY = os.environ.get('S3_SECRET_ACCESS_KEY', None)
@@ -961,6 +1034,85 @@ ENABLE_DIRECT_CONNECTIONS = PersistentConfig(
     'ENABLE_DIRECT_CONNECTIONS',
     'direct.enable',
     os.environ.get('ENABLE_DIRECT_CONNECTIONS', 'False').lower() == 'true',
+)
+
+####################################
+# OLLAMA_BASE_URL
+####################################
+
+ENABLE_OLLAMA_API = PersistentConfig(
+    'ENABLE_OLLAMA_API',
+    'ollama.enable',
+    os.environ.get('ENABLE_OLLAMA_API', 'True').lower() == 'true',
+)
+
+OLLAMA_API_BASE_URL = os.environ.get('OLLAMA_API_BASE_URL', 'http://localhost:11434/api')
+
+OLLAMA_BASE_URL = os.environ.get('OLLAMA_BASE_URL', '')
+if OLLAMA_BASE_URL:
+    # Remove trailing slash
+    OLLAMA_BASE_URL = OLLAMA_BASE_URL[:-1] if OLLAMA_BASE_URL.endswith('/') else OLLAMA_BASE_URL
+
+
+K8S_FLAG = os.environ.get('K8S_FLAG', '')
+USE_OLLAMA_DOCKER = os.environ.get('USE_OLLAMA_DOCKER', 'false')
+
+if OLLAMA_BASE_URL == '' and OLLAMA_API_BASE_URL != '':
+    OLLAMA_BASE_URL = OLLAMA_API_BASE_URL[:-4] if OLLAMA_API_BASE_URL.endswith('/api') else OLLAMA_API_BASE_URL
+
+if ENV == 'prod':
+    if OLLAMA_BASE_URL == '/ollama' and not K8S_FLAG:
+        if USE_OLLAMA_DOCKER.lower() == 'true':
+            # if you use all-in-one docker container (Open WebUI + Ollama)
+            # with the docker build arg USE_OLLAMA=true (--build-arg="USE_OLLAMA=true") this only works with http://localhost:11434
+            OLLAMA_BASE_URL = 'http://localhost:11434'
+        else:
+            OLLAMA_BASE_URL = 'http://host.docker.internal:11434'
+    elif K8S_FLAG:
+        OLLAMA_BASE_URL = 'http://ollama-service.open-webui.svc.cluster.local:11434'
+
+
+def _resolve_ollama_base_url(url: str) -> str:
+    """If the default Ollama port (11434) is unreachable, try the fallback port (12434)."""
+
+    def reachable(host: str, port: int) -> bool:
+        try:
+            with socket.create_connection((host, port), timeout=1.0):
+                return True
+        except (OSError, TimeoutError):
+            return False
+
+    host = urlparse(url).hostname or 'localhost'
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        default = pool.submit(reachable, host, 11434)
+        fallback = pool.submit(reachable, host, 12434)
+
+    if not default.result() and fallback.result():
+        url = url.replace(':11434', ':12434')
+        log.info(f'Ollama port 11434 unreachable on {host}, falling back to 12434')
+    elif not default.result():
+        log.info(f'Ollama ports 11434 and 12434 both unreachable on {host}')
+
+    return url
+
+
+# Auto-resolve Ollama port when no explicit URL was provided by the user.
+# The Dockerfile default is "/ollama" which the block above rewrites to :11434.
+if os.environ.get('OLLAMA_BASE_URL', '') in ('', '/ollama') and not os.environ.get('OLLAMA_BASE_URLS', ''):
+    OLLAMA_BASE_URL = _resolve_ollama_base_url(OLLAMA_BASE_URL)
+
+
+OLLAMA_BASE_URLS = os.environ.get('OLLAMA_BASE_URLS', '')
+OLLAMA_BASE_URLS = OLLAMA_BASE_URLS if OLLAMA_BASE_URLS != '' else OLLAMA_BASE_URL
+
+OLLAMA_BASE_URLS = [url.strip() for url in OLLAMA_BASE_URLS.split(';')]
+OLLAMA_BASE_URLS = PersistentConfig('OLLAMA_BASE_URLS', 'ollama.base_urls', OLLAMA_BASE_URLS)
+
+OLLAMA_API_CONFIGS = PersistentConfig(
+    'OLLAMA_API_CONFIGS',
+    'ollama.api_configs',
+    {},
 )
 
 ####################################
@@ -1046,6 +1198,18 @@ TOOL_SERVER_CONNECTIONS = PersistentConfig(
 )
 
 ####################################
+# TERMINAL_SERVER
+####################################
+
+terminal_server_connections = json.loads(os.environ.get('TERMINAL_SERVER_CONNECTIONS', '[]'))
+
+TERMINAL_SERVER_CONNECTIONS = PersistentConfig(
+    'TERMINAL_SERVER_CONNECTIONS',
+    'terminal_server.connections',
+    terminal_server_connections,
+)
+
+####################################
 # WEBUI
 ####################################
 
@@ -1061,8 +1225,14 @@ ENABLE_SIGNUP = PersistentConfig(
 
 ENABLE_LOGIN_FORM = PersistentConfig(
     'ENABLE_LOGIN_FORM',
-    'ui.ENABLE_LOGIN_FORM',
+    'ui.enable_login_form',
     os.environ.get('ENABLE_LOGIN_FORM', 'True').lower() == 'true',
+)
+
+ENABLE_PASSWORD_CHANGE_FORM = PersistentConfig(
+    'ENABLE_PASSWORD_CHANGE_FORM',
+    'ui.enable_password_change_form',
+    os.environ.get('ENABLE_PASSWORD_CHANGE_FORM', 'True').lower() == 'true',
 )
 
 ENABLE_PASSWORD_AUTH = os.environ.get('ENABLE_PASSWORD_AUTH', 'True').lower() == 'true'
@@ -1135,10 +1305,16 @@ DEFAULT_MODEL_METADATA = PersistentConfig(
     {},
 )
 
+try:
+    default_model_params = json.loads(os.environ.get('DEFAULT_MODEL_PARAMS', '{}'))
+except Exception as e:
+    log.exception(f'Error loading DEFAULT_MODEL_PARAMS: {e}')
+    default_model_params = {}
+
 DEFAULT_MODEL_PARAMS = PersistentConfig(
     'DEFAULT_MODEL_PARAMS',
     'models.default_params',
-    {},
+    default_model_params,
 )
 
 DEFAULT_USER_ROLE = PersistentConfig(
@@ -1260,6 +1436,12 @@ USER_PERMISSIONS_WORKSPACE_SKILLS_ALLOW_PUBLIC_SHARING = (
 )
 
 
+USER_PERMISSIONS_NOTES_ALLOW_SHARING = os.environ.get('USER_PERMISSIONS_NOTES_ALLOW_SHARING', 'False').lower() == 'true'
+
+USER_PERMISSIONS_NOTES_ALLOW_PUBLIC_SHARING = (
+    os.environ.get('USER_PERMISSIONS_NOTES_ALLOW_PUBLIC_SHARING', 'False').lower() == 'true'
+)
+
 USER_PERMISSIONS_ACCESS_GRANTS_ALLOW_USERS = (
     os.environ.get('USER_PERMISSIONS_ACCESS_GRANTS_ALLOW_USERS', 'True').lower() == 'true'
 )
@@ -1324,12 +1506,25 @@ USER_PERMISSIONS_FEATURES_IMAGE_GENERATION = (
     os.environ.get('USER_PERMISSIONS_FEATURES_IMAGE_GENERATION', 'True').lower() == 'true'
 )
 
+USER_PERMISSIONS_FEATURES_CODE_INTERPRETER = (
+    os.environ.get('USER_PERMISSIONS_FEATURES_CODE_INTERPRETER', 'True').lower() == 'true'
+)
+
 USER_PERMISSIONS_FEATURES_FOLDERS = os.environ.get('USER_PERMISSIONS_FEATURES_FOLDERS', 'True').lower() == 'true'
 
+USER_PERMISSIONS_FEATURES_NOTES = os.environ.get('USER_PERMISSIONS_FEATURES_NOTES', 'True').lower() == 'true'
+
+USER_PERMISSIONS_FEATURES_CHANNELS = os.environ.get('USER_PERMISSIONS_FEATURES_CHANNELS', 'True').lower() == 'true'
 
 USER_PERMISSIONS_FEATURES_API_KEYS = os.environ.get('USER_PERMISSIONS_FEATURES_API_KEYS', 'False').lower() == 'true'
 
 USER_PERMISSIONS_FEATURES_MEMORIES = os.environ.get('USER_PERMISSIONS_FEATURES_MEMORIES', 'True').lower() == 'true'
+
+USER_PERMISSIONS_FEATURES_AUTOMATIONS = (
+    os.environ.get('USER_PERMISSIONS_FEATURES_AUTOMATIONS', 'False').lower() == 'true'
+)
+
+USER_PERMISSIONS_FEATURES_CALENDAR = os.environ.get('USER_PERMISSIONS_FEATURES_CALENDAR', 'True').lower() == 'true'
 
 
 USER_PERMISSIONS_SETTINGS_INTERFACE = os.environ.get('USER_PERMISSIONS_SETTINGS_INTERFACE', 'True').lower() == 'true'
@@ -1360,6 +1555,8 @@ DEFAULT_USER_PERMISSIONS = {
         'public_tools': USER_PERMISSIONS_WORKSPACE_TOOLS_ALLOW_PUBLIC_SHARING,
         'skills': USER_PERMISSIONS_WORKSPACE_SKILLS_ALLOW_SHARING,
         'public_skills': USER_PERMISSIONS_WORKSPACE_SKILLS_ALLOW_PUBLIC_SHARING,
+        'notes': USER_PERMISSIONS_NOTES_ALLOW_SHARING,
+        'public_notes': USER_PERMISSIONS_NOTES_ALLOW_PUBLIC_SHARING,
     },
     'access_grants': {
         'allow_users': USER_PERMISSIONS_ACCESS_GRANTS_ALLOW_USERS,
@@ -1389,12 +1586,17 @@ DEFAULT_USER_PERMISSIONS = {
     'features': {
         # General features
         'api_keys': USER_PERMISSIONS_FEATURES_API_KEYS,
+        'notes': USER_PERMISSIONS_FEATURES_NOTES,
         'folders': USER_PERMISSIONS_FEATURES_FOLDERS,
+        'channels': USER_PERMISSIONS_FEATURES_CHANNELS,
         'direct_tool_servers': USER_PERMISSIONS_FEATURES_DIRECT_TOOL_SERVERS,
         # Chat features
         'web_search': USER_PERMISSIONS_FEATURES_WEB_SEARCH,
         'image_generation': USER_PERMISSIONS_FEATURES_IMAGE_GENERATION,
+        'code_interpreter': USER_PERMISSIONS_FEATURES_CODE_INTERPRETER,
         'memories': USER_PERMISSIONS_FEATURES_MEMORIES,
+        'automations': USER_PERMISSIONS_FEATURES_AUTOMATIONS,
+        'calendar': USER_PERMISSIONS_FEATURES_CALENDAR,
     },
     'settings': {
         'interface': USER_PERMISSIONS_SETTINGS_INTERFACE,
@@ -1419,11 +1621,68 @@ FOLDER_MAX_FILE_COUNT = PersistentConfig(
     os.environ.get('FOLDER_MAX_FILE_COUNT', ''),
 )
 
+ENABLE_CHANNELS = PersistentConfig(
+    'ENABLE_CHANNELS',
+    'channels.enable',
+    os.environ.get('ENABLE_CHANNELS', 'False').lower() == 'true',
+)
+
+ENABLE_CALENDAR = PersistentConfig(
+    'ENABLE_CALENDAR',
+    'calendar.enable',
+    os.environ.get('ENABLE_CALENDAR', 'True').lower() == 'true',
+)
+
+ENABLE_AUTOMATIONS = PersistentConfig(
+    'ENABLE_AUTOMATIONS',
+    'automations.enable',
+    os.environ.get('ENABLE_AUTOMATIONS', 'True').lower() == 'true',
+)
+
+AUTOMATION_MAX_COUNT = PersistentConfig(
+    'AUTOMATION_MAX_COUNT',
+    'automations.max_count',
+    os.environ.get('AUTOMATION_MAX_COUNT', ''),
+)
+
+AUTOMATION_MIN_INTERVAL = PersistentConfig(
+    'AUTOMATION_MIN_INTERVAL',
+    'automations.min_interval',
+    os.environ.get('AUTOMATION_MIN_INTERVAL', ''),
+)
+
+ENABLE_NOTES = PersistentConfig(
+    'ENABLE_NOTES',
+    'notes.enable',
+    os.environ.get('ENABLE_NOTES', 'True').lower() == 'true',
+)
+
 ENABLE_USER_STATUS = PersistentConfig(
     'ENABLE_USER_STATUS',
     'users.enable_status',
     os.environ.get('ENABLE_USER_STATUS', 'True').lower() == 'true',
 )
+
+ENABLE_EVALUATION_ARENA_MODELS = PersistentConfig(
+    'ENABLE_EVALUATION_ARENA_MODELS',
+    'evaluation.arena.enable',
+    os.environ.get('ENABLE_EVALUATION_ARENA_MODELS', 'True').lower() == 'true',
+)
+EVALUATION_ARENA_MODELS = PersistentConfig(
+    'EVALUATION_ARENA_MODELS',
+    'evaluation.arena.models',
+    [],
+)
+
+DEFAULT_ARENA_MODEL = {
+    'id': 'arena-model',
+    'name': 'Arena Model',
+    'meta': {
+        'profile_image_url': '/favicon.png',
+        'description': 'Submit your questions to anonymous AI chatbots and vote on the best response.',
+        'model_ids': None,
+    },
+}
 
 WEBHOOK_URL = PersistentConfig('WEBHOOK_URL', 'webhook_url', os.environ.get('WEBHOOK_URL', ''))
 
@@ -1444,6 +1703,18 @@ BYPASS_ADMIN_ACCESS_CONTROL = (
 ENABLE_ADMIN_CHAT_ACCESS = os.environ.get('ENABLE_ADMIN_CHAT_ACCESS', 'True').lower() == 'true'
 
 ENABLE_ADMIN_ANALYTICS = os.environ.get('ENABLE_ADMIN_ANALYTICS', 'True').lower() == 'true'
+
+ENABLE_COMMUNITY_SHARING = PersistentConfig(
+    'ENABLE_COMMUNITY_SHARING',
+    'ui.enable_community_sharing',
+    os.environ.get('ENABLE_COMMUNITY_SHARING', 'True').lower() == 'true',
+)
+
+ENABLE_MESSAGE_RATING = PersistentConfig(
+    'ENABLE_MESSAGE_RATING',
+    'ui.enable_message_rating',
+    os.environ.get('ENABLE_MESSAGE_RATING', 'True').lower() == 'true',
+)
 
 ENABLE_USER_WEBHOOKS = PersistentConfig(
     'ENABLE_USER_WEBHOOKS',
@@ -1847,11 +2118,157 @@ Your task is to synthesize these responses into a single, high-quality response.
 Responses from models: {{responses}}"""
 
 
+####################################
+# Code Interpreter
+####################################
+
+ENABLE_CODE_EXECUTION = PersistentConfig(
+    'ENABLE_CODE_EXECUTION',
+    'code_execution.enable',
+    os.environ.get('ENABLE_CODE_EXECUTION', 'True').lower() == 'true',
+)
+
+CODE_EXECUTION_ENGINE = PersistentConfig(
+    'CODE_EXECUTION_ENGINE',
+    'code_execution.engine',
+    os.environ.get('CODE_EXECUTION_ENGINE', 'pyodide'),
+)
+
+CODE_EXECUTION_JUPYTER_URL = PersistentConfig(
+    'CODE_EXECUTION_JUPYTER_URL',
+    'code_execution.jupyter.url',
+    os.environ.get('CODE_EXECUTION_JUPYTER_URL', ''),
+)
+
+CODE_EXECUTION_JUPYTER_AUTH = PersistentConfig(
+    'CODE_EXECUTION_JUPYTER_AUTH',
+    'code_execution.jupyter.auth',
+    os.environ.get('CODE_EXECUTION_JUPYTER_AUTH', ''),
+)
+
+CODE_EXECUTION_JUPYTER_AUTH_TOKEN = PersistentConfig(
+    'CODE_EXECUTION_JUPYTER_AUTH_TOKEN',
+    'code_execution.jupyter.auth_token',
+    os.environ.get('CODE_EXECUTION_JUPYTER_AUTH_TOKEN', ''),
+)
+
+
+CODE_EXECUTION_JUPYTER_AUTH_PASSWORD = PersistentConfig(
+    'CODE_EXECUTION_JUPYTER_AUTH_PASSWORD',
+    'code_execution.jupyter.auth_password',
+    os.environ.get('CODE_EXECUTION_JUPYTER_AUTH_PASSWORD', ''),
+)
+
+CODE_EXECUTION_JUPYTER_TIMEOUT = PersistentConfig(
+    'CODE_EXECUTION_JUPYTER_TIMEOUT',
+    'code_execution.jupyter.timeout',
+    int(os.environ.get('CODE_EXECUTION_JUPYTER_TIMEOUT', '60')),
+)
+
+ENABLE_CODE_INTERPRETER = PersistentConfig(
+    'ENABLE_CODE_INTERPRETER',
+    'code_interpreter.enable',
+    os.environ.get('ENABLE_CODE_INTERPRETER', 'True').lower() == 'true',
+)
+
 ENABLE_MEMORIES = PersistentConfig(
     'ENABLE_MEMORIES',
     'memories.enable',
     os.environ.get('ENABLE_MEMORIES', 'True').lower() == 'true',
 )
+
+CODE_INTERPRETER_ENGINE = PersistentConfig(
+    'CODE_INTERPRETER_ENGINE',
+    'code_interpreter.engine',
+    os.environ.get('CODE_INTERPRETER_ENGINE', 'pyodide'),
+)
+
+CODE_INTERPRETER_PROMPT_TEMPLATE = PersistentConfig(
+    'CODE_INTERPRETER_PROMPT_TEMPLATE',
+    'code_interpreter.prompt_template',
+    os.environ.get('CODE_INTERPRETER_PROMPT_TEMPLATE', ''),
+)
+
+CODE_INTERPRETER_JUPYTER_URL = PersistentConfig(
+    'CODE_INTERPRETER_JUPYTER_URL',
+    'code_interpreter.jupyter.url',
+    os.environ.get('CODE_INTERPRETER_JUPYTER_URL', os.environ.get('CODE_EXECUTION_JUPYTER_URL', '')),
+)
+
+CODE_INTERPRETER_JUPYTER_AUTH = PersistentConfig(
+    'CODE_INTERPRETER_JUPYTER_AUTH',
+    'code_interpreter.jupyter.auth',
+    os.environ.get(
+        'CODE_INTERPRETER_JUPYTER_AUTH',
+        os.environ.get('CODE_EXECUTION_JUPYTER_AUTH', ''),
+    ),
+)
+
+CODE_INTERPRETER_JUPYTER_AUTH_TOKEN = PersistentConfig(
+    'CODE_INTERPRETER_JUPYTER_AUTH_TOKEN',
+    'code_interpreter.jupyter.auth_token',
+    os.environ.get(
+        'CODE_INTERPRETER_JUPYTER_AUTH_TOKEN',
+        os.environ.get('CODE_EXECUTION_JUPYTER_AUTH_TOKEN', ''),
+    ),
+)
+
+
+CODE_INTERPRETER_JUPYTER_AUTH_PASSWORD = PersistentConfig(
+    'CODE_INTERPRETER_JUPYTER_AUTH_PASSWORD',
+    'code_interpreter.jupyter.auth_password',
+    os.environ.get(
+        'CODE_INTERPRETER_JUPYTER_AUTH_PASSWORD',
+        os.environ.get('CODE_EXECUTION_JUPYTER_AUTH_PASSWORD', ''),
+    ),
+)
+
+CODE_INTERPRETER_JUPYTER_TIMEOUT = PersistentConfig(
+    'CODE_INTERPRETER_JUPYTER_TIMEOUT',
+    'code_interpreter.jupyter.timeout',
+    int(
+        os.environ.get(
+            'CODE_INTERPRETER_JUPYTER_TIMEOUT',
+            os.environ.get('CODE_EXECUTION_JUPYTER_TIMEOUT', '60'),
+        )
+    ),
+)
+
+CODE_INTERPRETER_BLOCKED_MODULES = [
+    library.strip() for library in os.environ.get('CODE_INTERPRETER_BLOCKED_MODULES', '').split(',') if library.strip()
+]
+
+DEFAULT_CODE_INTERPRETER_PROMPT = """
+#### Code Interpreter
+
+You have access to a Python code interpreter via: `<code_interpreter type="code" lang="python"></code_interpreter>`
+
+- The Python shell runs directly in the user's browser for fast execution of analysis, calculations, or problem-solving. Use it in this response.
+- You can use a wide array of libraries for data manipulation, visualization, API calls, or any computational task. Think outside the box and harness Python's full potential.
+- **You must enclose your code within `<code_interpreter type="code" lang="python">` XML tags** and stop right away. If you don't, the code won't execute.
+- Do NOT use triple backticks (```py ... ```) inside the XML tags — that is markdown formatting, not executable Python code.
+- **Always print meaningful outputs** (results, tables, summaries, visuals). Avoid implicit outputs; use explicit print statements.
+- After obtaining output, **provide a concise analysis, interpretation, or next steps** to help the user understand the findings.
+- If results are unclear or unexpected, refine the code and re-execute. Iterate until you deliver meaningful insights.
+- **If a link to an image, audio, or any file appears in the output, display it exactly as-is** in your response so the user can access it. Do not modify the link.
+- Respond in the chat's primary language. Default to English if multilingual.
+
+Ensure the code interpreter is effectively utilized to achieve the highest-quality analysis for the user."""
+
+# Appended to the code interpreter prompt only when engine is pyodide (not jupyter)
+CODE_INTERPRETER_PYODIDE_PROMPT = """
+
+##### Pyodide Environment
+
+- This Python environment runs via Pyodide in the browser. **Do not install packages** — `pip install`, `subprocess`, and `micropip.install()` are not available.
+- If a required library is unavailable, use an alternative approach with available modules. Do not attempt to install anything.
+
+##### Persistent File System
+
+- User-uploaded files are available at `/mnt/uploads/`. When the user asks you to work with their files, read from this directory.
+- You can also write output files to `/mnt/uploads/` so the user can access and download them from the file browser.
+- The file system persists across code executions within the same session.
+- Use `import os; os.listdir('/mnt/uploads')` to discover available files."""
 
 
 ####################################
@@ -2410,6 +2827,18 @@ MISTRAL_OCR_API_KEY = PersistentConfig(
     os.getenv('MISTRAL_OCR_API_KEY', ''),
 )
 
+PADDLEOCR_VL_BASE_URL = PersistentConfig(
+    'PADDLEOCR_VL_BASE_URL',
+    'rag.paddleocr_vl_base_url',
+    os.getenv('PADDLEOCR_VL_BASE_URL', 'http://localhost:8080'),
+)
+
+PADDLEOCR_VL_TOKEN = PersistentConfig(
+    'PADDLEOCR_VL_TOKEN',
+    'rag.paddleocr_vl_token',
+    os.getenv('PADDLEOCR_VL_TOKEN', ''),
+)
+
 BYPASS_EMBEDDING_AND_RETRIEVAL = PersistentConfig(
     'BYPASS_EMBEDDING_AND_RETRIEVAL',
     'rag.bypass_embedding_and_retrieval',
@@ -2563,6 +2992,12 @@ RAG_RERANKING_MODEL_TRUST_REMOTE_CODE = (
     os.environ.get('RAG_RERANKING_MODEL_TRUST_REMOTE_CODE', 'True').lower() == 'true'
 )
 
+RAG_RERANKING_BATCH_SIZE = PersistentConfig(
+    'RAG_RERANKING_BATCH_SIZE',
+    'rag.reranking_batch_size',
+    int(os.environ.get('RAG_RERANKING_BATCH_SIZE', '32')),
+)
+
 RAG_EXTERNAL_RERANKER_URL = PersistentConfig(
     'RAG_EXTERNAL_RERANKER_URL',
     'rag.external_reranker_url',
@@ -2676,6 +3111,19 @@ RAG_AZURE_OPENAI_API_VERSION = PersistentConfig(
     os.getenv('RAG_AZURE_OPENAI_API_VERSION', ''),
 )
 
+RAG_OLLAMA_BASE_URL = PersistentConfig(
+    'RAG_OLLAMA_BASE_URL',
+    'rag.ollama.url',
+    os.getenv('RAG_OLLAMA_BASE_URL', OLLAMA_BASE_URL),
+)
+
+RAG_OLLAMA_API_KEY = PersistentConfig(
+    'RAG_OLLAMA_API_KEY',
+    'rag.ollama.key',
+    os.getenv('RAG_OLLAMA_API_KEY', ''),
+)
+
+
 ENABLE_RAG_LOCAL_WEB_FETCH = os.getenv('ENABLE_RAG_LOCAL_WEB_FETCH', 'False').lower() == 'true'
 
 
@@ -2771,7 +3219,7 @@ WEB_SEARCH_CONCURRENT_REQUESTS = PersistentConfig(
 
 WEB_FETCH_MAX_CONTENT_LENGTH = PersistentConfig(
     'WEB_FETCH_MAX_CONTENT_LENGTH',
-    'rag.web.search.fetch_url_max_content_length',
+    'rag.web.fetch.max_content_length',
     (int(os.environ.get('WEB_FETCH_MAX_CONTENT_LENGTH')) if os.environ.get('WEB_FETCH_MAX_CONTENT_LENGTH') else None),
 )
 
@@ -2807,6 +3255,12 @@ WEB_SEARCH_TRUST_ENV = PersistentConfig(
     os.getenv('WEB_SEARCH_TRUST_ENV', 'False').lower() == 'true',
 )
 
+
+OLLAMA_CLOUD_WEB_SEARCH_API_KEY = PersistentConfig(
+    'OLLAMA_CLOUD_WEB_SEARCH_API_KEY',
+    'rag.web.search.ollama_cloud_api_key',
+    os.getenv('OLLAMA_CLOUD_API_KEY', ''),
+)
 
 SEARXNG_QUERY_URL = PersistentConfig(
     'SEARXNG_QUERY_URL',
@@ -3612,6 +4066,18 @@ AUDIO_TTS_AZURE_SPEECH_OUTPUT_FORMAT = PersistentConfig(
     'AUDIO_TTS_AZURE_SPEECH_OUTPUT_FORMAT',
     'audio.tts.azure.speech_output_format',
     os.getenv('AUDIO_TTS_AZURE_SPEECH_OUTPUT_FORMAT', 'audio-24khz-160kbitrate-mono-mp3'),
+)
+
+AUDIO_TTS_MISTRAL_API_KEY = PersistentConfig(
+    'AUDIO_TTS_MISTRAL_API_KEY',
+    'audio.tts.mistral.api_key',
+    os.getenv('AUDIO_TTS_MISTRAL_API_KEY', ''),
+)
+
+AUDIO_TTS_MISTRAL_API_BASE_URL = PersistentConfig(
+    'AUDIO_TTS_MISTRAL_API_BASE_URL',
+    'audio.tts.mistral.api_base_url',
+    os.getenv('AUDIO_TTS_MISTRAL_API_BASE_URL', 'https://api.mistral.ai/v1'),
 )
 
 
