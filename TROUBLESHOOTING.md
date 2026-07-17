@@ -2,7 +2,7 @@
 
 ## Architecture Notes
 
-Open WebUI Slim is API-only. It does not bundle or proxy a local Ollama runtime. Configure external providers directly through Open WebUI connections/settings or environment variables.
+Open WebUI Slim uses external inference providers only. It does not bundle or proxy a local Ollama runtime. Configure providers directly through Open WebUI connections/settings or environment variables.
 
 ## Common Startup Issues
 
@@ -24,16 +24,13 @@ RAG_EMBEDDING_ENGINE=azure_openai
 
 Also ensure the matching API credentials are configured.
 
-### Speech-to-text or text-to-speech fails
+### Speech controls or endpoints are unavailable
 
-Slim removes local STT/TTS runtimes. Use external providers only.
+This is expected. Slim removes the entire speech-to-text and text-to-speech product surface, including remote-provider configuration, voice recording, calls, dictation, and read-aloud. Generic audio-file uploads and notification sounds remain available.
 
-Examples:
+### A fresh install has no sign-up link
 
-```bash
-AUDIO_STT_ENGINE=openai
-AUDIO_TTS_ENGINE=openai
-```
+Public password registration is intentionally closed. Create the first administrator with `WEBUI_ADMIN_EMAIL` and `WEBUI_ADMIN_PASSWORD`, or set `ENABLE_INITIAL_ADMIN_SIGNUP=true` only for an empty-database interactive bootstrap. The latter permits exactly one administrator account and cannot be used for later public signups.
 
 ## Docker Tips
 
@@ -47,6 +44,8 @@ Example:
 docker run -d -p 3000:8080 \
   -v open-webui:/app/backend/data \
   -e OPENAI_API_KEY=your_key \
+  -e WEBUI_ADMIN_EMAIL=admin@example.com \
+  -e WEBUI_ADMIN_PASSWORD='replace-with-a-strong-password' \
   --name open-webui \
   --restart always \
   ghcr.io/OWNER/open-webui-slim:slim

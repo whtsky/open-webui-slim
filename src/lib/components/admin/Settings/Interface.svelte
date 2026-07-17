@@ -32,9 +32,7 @@
 		ENABLE_SEARCH_QUERY_GENERATION: true,
 		ENABLE_RETRIEVAL_QUERY_GENERATION: true,
 		QUERY_GENERATION_PROMPT_TEMPLATE: '',
-		TOOLS_FUNCTION_CALLING_PROMPT_TEMPLATE: '',
-		ENABLE_VOICE_MODE_PROMPT: true,
-		VOICE_MODE_PROMPT_TEMPLATE: ''
+		TOOLS_FUNCTION_CALLING_PROMPT_TEMPLATE: ''
 	};
 
 	let chatConfig = {
@@ -298,32 +296,6 @@
 						>
 							<Textarea
 								bind:value={taskConfig.TITLE_GENERATION_PROMPT_TEMPLATE}
-								placeholder={$i18n.t(
-									'Leave empty to use the default prompt, or enter a custom prompt'
-								)}
-							/>
-						</Tooltip>
-					</div>
-				{/if}
-
-				<div class="mb-2.5 flex w-full items-center justify-between">
-					<div class=" self-center text-xs font-medium">
-						{$i18n.t('Voice Mode Prompt')}
-					</div>
-
-					<Switch bind:state={taskConfig.ENABLE_VOICE_MODE_PROMPT} />
-				</div>
-
-				{#if taskConfig.ENABLE_VOICE_MODE_PROMPT}
-					<div class="mb-2.5">
-						<div class=" mb-1 text-xs font-medium">{$i18n.t('Prompt Template')}</div>
-
-						<Tooltip
-							content={$i18n.t('Leave empty to use the default prompt, or enter a custom prompt')}
-							placement="top-start"
-						>
-							<Textarea
-								bind:value={taskConfig.VOICE_MODE_PROMPT_TEMPLATE}
 								placeholder={$i18n.t(
 									'Leave empty to use the default prompt, or enter a custom prompt'
 								)}

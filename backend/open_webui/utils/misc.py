@@ -13,7 +13,6 @@ from pathlib import Path
 from typing import Sequence, Union
 
 import aiohttp
-import mimeparse
 from open_webui.env import CHAT_STREAM_RESPONSE_CHUNK_MAX_BUFFER_SIZE
 
 log = logging.getLogger(__name__)
@@ -895,41 +894,6 @@ def throttle(interval: float = 10.0):
         return wrapper
 
     return decorator
-
-
-def strict_match_mime_type(supported: list[str] | str, header: str) -> str | None:
-    """
-    Strictly match the mime type with the supported mime types.
-
-    :param supported: The supported mime types.
-    :param header: The header to match.
-    :return: The matched mime type or None if no match is found.
-    """
-
-    try:
-        if isinstance(supported, str):
-            supported = supported.split(',')
-
-        supported = [s for s in supported if s.strip() and '/' in s]
-
-        if len(supported) == 0:
-            # Default to common types if none are specified
-            supported = ['audio/*', 'video/webm']
-
-        match = mimeparse.best_match(supported, header)
-        if not match:
-            return None
-
-        _, _, match_params = mimeparse.parse_mime_type(match)
-        _, _, header_params = mimeparse.parse_mime_type(header)
-        for k, v in match_params.items():
-            if header_params.get(k) != v:
-                return None
-
-        return match
-    except Exception as e:
-        log.exception(f'Failed to match mime type {header}: {e}')
-        return None
 
 
 def extract_urls(text: str) -> list[str]:

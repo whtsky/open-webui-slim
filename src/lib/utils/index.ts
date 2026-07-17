@@ -14,8 +14,6 @@ dayjs.extend(isToday);
 dayjs.extend(isYesterday);
 dayjs.extend(localizedFormat);
 
-import { TTS_RESPONSE_SPLIT } from '$lib/types';
-
 import { decode } from 'html-entities';
 
 //////////////////////////
@@ -1095,77 +1093,6 @@ export const extractSentences = (text: string) => {
 	});
 
 	return sentences.map(cleanText).filter(Boolean);
-};
-
-export const extractParagraphsForAudio = (text: string) => {
-	const codeBlocks: string[] = [];
-	let index = 0;
-
-	// Temporarily replace code blocks with placeholders and store the blocks separately
-	text = text.replace(codeBlockRegex, (match) => {
-		const placeholder = `\u0000${index}\u0000`; // Use a unique placeholder
-		codeBlocks[index++] = match;
-		return placeholder;
-	});
-
-	// Split the modified text into paragraphs based on newlines, avoiding these blocks
-	let paragraphs = text.split(/\n+/);
-
-	// Restore code blocks and process paragraphs
-	paragraphs = paragraphs.map((paragraph) => {
-		// Check if the paragraph includes a placeholder for a code block
-		return paragraph.replace(/\u0000(\d+)\u0000/g, (_, idx) => codeBlocks[idx]);
-	});
-
-	return paragraphs.map(cleanText).filter(Boolean);
-};
-
-export const extractSentencesForAudio = (text: string) => {
-	return extractSentences(text).reduce((mergedTexts, currentText) => {
-		const lastIndex = mergedTexts.length - 1;
-		if (lastIndex >= 0) {
-			const previousText = mergedTexts[lastIndex];
-			const wordCount = previousText.split(/\s+/).length;
-			const charCount = previousText.length;
-			if (wordCount < 4 || charCount < 50) {
-				mergedTexts[lastIndex] = previousText + ' ' + currentText;
-			} else {
-				mergedTexts.push(currentText);
-			}
-		} else {
-			mergedTexts.push(currentText);
-		}
-		return mergedTexts;
-	}, [] as string[]);
-};
-
-export const getMessageContentParts = (content: string, splitOn: string = 'punctuation') => {
-	// Strip <details> blocks directly on the full string before any
-	// code-block-aware processing. removeAllDetails (which callers use)
-	// applies the regex via replaceOutsideCode, which splits on triple-
-	// backtick code fences first. If a <details> block contains code
-	// fences (e.g. reasoning with code examples), the opening and
-	// closing tags land in separate segments and the regex fails,
-	// leaking thinking content into TTS. Applying the strip here on
-	// the full string catches those cases. (Fixes #22197)
-	content = content.replace(/<details[^>]*>[\s\S]*?<\/details>/gi, '');
-
-	const messageContentParts: string[] = [];
-
-	switch (splitOn) {
-		default:
-		case TTS_RESPONSE_SPLIT.PUNCTUATION:
-			messageContentParts.push(...extractSentencesForAudio(content));
-			break;
-		case TTS_RESPONSE_SPLIT.PARAGRAPHS:
-			messageContentParts.push(...extractParagraphsForAudio(content));
-			break;
-		case TTS_RESPONSE_SPLIT.NONE:
-			messageContentParts.push(cleanText(content));
-			break;
-	}
-
-	return messageContentParts;
 };
 
 export const blobToFile = (blob, fileName) => {

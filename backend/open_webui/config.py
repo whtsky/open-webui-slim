@@ -1289,103 +1289,12 @@ except json.JSONDecodeError:
 IMAGES_EDIT_COMFYUI_WORKFLOW_NODES = images_edit_comfyui_workflow_nodes
 
 ####################################
-# Audio
-####################################
-
-# Transcription language applies to external STT providers as well.
-WHISPER_LANGUAGE = os.getenv('WHISPER_LANGUAGE', '').lower() or None
-
-# Add Deepgram configuration
-DEEPGRAM_API_KEY = os.getenv('DEEPGRAM_API_KEY', '')
-
-# ElevenLabs configuration
-ELEVENLABS_API_BASE_URL = os.getenv('ELEVENLABS_API_BASE_URL', 'https://api.elevenlabs.io')
-
-AUDIO_STT_OPENAI_API_BASE_URL = os.getenv('AUDIO_STT_OPENAI_API_BASE_URL', OPENAI_API_BASE_URL)
-
-AUDIO_STT_OPENAI_API_KEY = os.getenv('AUDIO_STT_OPENAI_API_KEY', OPENAI_API_KEY)
-
-AUDIO_STT_OPENAI_API_REQUEST_FORMAT = os.getenv('AUDIO_STT_OPENAI_API_REQUEST_FORMAT', 'multipart')
-
-AUDIO_STT_ENGINE = os.getenv('AUDIO_STT_ENGINE', '')
-
-AUDIO_STT_MODEL = os.getenv('AUDIO_STT_MODEL', '')
-
-AUDIO_STT_SUPPORTED_CONTENT_TYPES = [
-    content_type.strip()
-    for content_type in os.getenv('AUDIO_STT_SUPPORTED_CONTENT_TYPES', '').split(',')
-    if content_type.strip()
-]
-
-AUDIO_STT_ALLOWED_EXTENSIONS = [
-    ext.strip()
-    for ext in os.getenv(
-        'AUDIO_STT_ALLOWED_EXTENSIONS',
-        'mp3,wav,m4a,webm,ogg,flac,mp4,mpga,mpeg',
-    ).split(',')
-    if ext.strip()
-]
-
-AUDIO_STT_AZURE_API_KEY = os.getenv('AUDIO_STT_AZURE_API_KEY', '')
-
-AUDIO_STT_AZURE_REGION = os.getenv('AUDIO_STT_AZURE_REGION', '')
-
-AUDIO_STT_AZURE_LOCALES = os.getenv('AUDIO_STT_AZURE_LOCALES', '')
-
-AUDIO_STT_AZURE_BASE_URL = os.getenv('AUDIO_STT_AZURE_BASE_URL', '')
-
-AUDIO_STT_AZURE_MAX_SPEAKERS = os.getenv('AUDIO_STT_AZURE_MAX_SPEAKERS', '')
-
-AUDIO_STT_MISTRAL_API_KEY = os.getenv('AUDIO_STT_MISTRAL_API_KEY', '')
-
-AUDIO_STT_MISTRAL_API_BASE_URL = os.getenv('AUDIO_STT_MISTRAL_API_BASE_URL', 'https://api.mistral.ai/v1')
-
-AUDIO_STT_MISTRAL_USE_CHAT_COMPLETIONS = os.getenv('AUDIO_STT_MISTRAL_USE_CHAT_COMPLETIONS', 'false').lower() == 'true'
-
-AUDIO_TTS_OPENAI_API_BASE_URL = os.getenv('AUDIO_TTS_OPENAI_API_BASE_URL', OPENAI_API_BASE_URL)
-AUDIO_TTS_OPENAI_API_KEY = os.getenv('AUDIO_TTS_OPENAI_API_KEY', OPENAI_API_KEY)
-
-audio_tts_openai_params = os.getenv('AUDIO_TTS_OPENAI_PARAMS', '')
-try:
-    audio_tts_openai_params = json.loads(audio_tts_openai_params)
-except json.JSONDecodeError:
-    audio_tts_openai_params = {}
-
-AUDIO_TTS_OPENAI_PARAMS = audio_tts_openai_params
-
-
-AUDIO_TTS_API_KEY = os.getenv('AUDIO_TTS_API_KEY', '')
-
-AUDIO_TTS_ENGINE = os.getenv('AUDIO_TTS_ENGINE', '')
-
-
-AUDIO_TTS_MODEL = os.getenv('AUDIO_TTS_MODEL', 'tts-1')
-
-AUDIO_TTS_VOICE = os.getenv('AUDIO_TTS_VOICE', 'alloy')
-
-AUDIO_TTS_SPLIT_ON = os.getenv('AUDIO_TTS_SPLIT_ON', 'punctuation')
-
-AUDIO_TTS_AZURE_SPEECH_REGION = os.getenv('AUDIO_TTS_AZURE_SPEECH_REGION', '')
-
-AUDIO_TTS_AZURE_SPEECH_BASE_URL = os.getenv('AUDIO_TTS_AZURE_SPEECH_BASE_URL', '')
-
-AUDIO_TTS_AZURE_SPEECH_OUTPUT_FORMAT = os.getenv(
-    'AUDIO_TTS_AZURE_SPEECH_OUTPUT_FORMAT', 'audio-24khz-160kbitrate-mono-mp3'
-)
-
-AUDIO_TTS_MISTRAL_API_KEY = os.getenv('AUDIO_TTS_MISTRAL_API_KEY', '')
-
-AUDIO_TTS_MISTRAL_API_BASE_URL = os.getenv('AUDIO_TTS_MISTRAL_API_BASE_URL', 'https://api.mistral.ai/v1')
-
-####################################
 # WEBUI
 ####################################
 
 
 WEBUI_URL = os.getenv('WEBUI_URL', '')
 
-
-ENABLE_SIGNUP = False if not WEBUI_AUTH else os.getenv('ENABLE_SIGNUP', 'True').lower() == 'true'
 
 ENABLE_LOGIN_FORM = os.getenv('ENABLE_LOGIN_FORM', 'True').lower() == 'true'
 
@@ -1566,10 +1475,6 @@ USER_PERMISSIONS_WORKSPACE_SKILLS_ALLOW_PUBLIC_SHARING = (
 USER_PERMISSIONS_FOLDERS_ALLOW_SHARING = os.getenv('USER_PERMISSIONS_FOLDERS_ALLOW_SHARING', 'False').lower() == 'true'
 
 
-USER_PERMISSIONS_CALENDAR_ALLOW_PUBLIC_SHARING = (
-    os.getenv('USER_PERMISSIONS_CALENDAR_ALLOW_PUBLIC_SHARING', 'False').lower() == 'true'
-)
-
 USER_PERMISSIONS_ACCESS_GRANTS_ALLOW_USERS = (
     os.getenv('USER_PERMISSIONS_ACCESS_GRANTS_ALLOW_USERS', 'True').lower() == 'true'
 )
@@ -1609,12 +1514,6 @@ USER_PERMISSIONS_CHAT_EXPORT = os.getenv('USER_PERMISSIONS_CHAT_EXPORT', 'True')
 
 USER_PERMISSIONS_CHAT_IMPORT = os.getenv('USER_PERMISSIONS_CHAT_IMPORT', 'True').lower() == 'true'
 
-USER_PERMISSIONS_CHAT_STT = os.getenv('USER_PERMISSIONS_CHAT_STT', 'True').lower() == 'true'
-
-USER_PERMISSIONS_CHAT_TTS = os.getenv('USER_PERMISSIONS_CHAT_TTS', 'True').lower() == 'true'
-
-USER_PERMISSIONS_CHAT_CALL = os.getenv('USER_PERMISSIONS_CHAT_CALL', 'True').lower() == 'true'
-
 USER_PERMISSIONS_CHAT_MULTIPLE_MODELS = os.getenv('USER_PERMISSIONS_CHAT_MULTIPLE_MODELS', 'True').lower() == 'true'
 
 USER_PERMISSIONS_CHAT_TEMPORARY = os.getenv('USER_PERMISSIONS_CHAT_TEMPORARY', 'True').lower() == 'true'
@@ -1639,10 +1538,6 @@ USER_PERMISSIONS_FEATURES_FOLDERS = os.getenv('USER_PERMISSIONS_FEATURES_FOLDERS
 USER_PERMISSIONS_FEATURES_API_KEYS = os.getenv('USER_PERMISSIONS_FEATURES_API_KEYS', 'False').lower() == 'true'
 
 USER_PERMISSIONS_FEATURES_MEMORIES = os.getenv('USER_PERMISSIONS_FEATURES_MEMORIES', 'True').lower() == 'true'
-
-USER_PERMISSIONS_FEATURES_AUTOMATIONS = os.getenv('USER_PERMISSIONS_FEATURES_AUTOMATIONS', 'False').lower() == 'true'
-
-USER_PERMISSIONS_FEATURES_CALENDAR = os.getenv('USER_PERMISSIONS_FEATURES_CALENDAR', 'True').lower() == 'true'
 
 USER_PERMISSIONS_FEATURES_USER_WEBHOOKS = (
     os.getenv('USER_PERMISSIONS_FEATURES_USER_WEBHOOKS', 'False').lower() == 'true'
@@ -1681,7 +1576,6 @@ DEFAULT_USER_PERMISSIONS = {
         'public_skills': USER_PERMISSIONS_WORKSPACE_SKILLS_ALLOW_PUBLIC_SHARING,
         'folders': USER_PERMISSIONS_FOLDERS_ALLOW_SHARING,
         'public_chats': USER_PERMISSIONS_CHAT_ALLOW_PUBLIC_SHARING,
-        'public_calendars': USER_PERMISSIONS_CALENDAR_ALLOW_PUBLIC_SHARING,
     },
     'access_grants': {
         'allow_users': USER_PERMISSIONS_ACCESS_GRANTS_ALLOW_USERS,
@@ -1701,9 +1595,6 @@ DEFAULT_USER_PERMISSIONS = {
         'share': USER_PERMISSIONS_CHAT_SHARE,
         'export': USER_PERMISSIONS_CHAT_EXPORT,
         'import': USER_PERMISSIONS_CHAT_IMPORT,
-        'stt': USER_PERMISSIONS_CHAT_STT,
-        'tts': USER_PERMISSIONS_CHAT_TTS,
-        'call': USER_PERMISSIONS_CHAT_CALL,
         'multiple_models': USER_PERMISSIONS_CHAT_MULTIPLE_MODELS,
         'temporary': USER_PERMISSIONS_CHAT_TEMPORARY,
         'temporary_enforced': USER_PERMISSIONS_CHAT_TEMPORARY_ENFORCED,
@@ -1717,8 +1608,6 @@ DEFAULT_USER_PERMISSIONS = {
         'web_search': USER_PERMISSIONS_FEATURES_WEB_SEARCH,
         'image_generation': USER_PERMISSIONS_FEATURES_IMAGE_GENERATION,
         'memories': USER_PERMISSIONS_FEATURES_MEMORIES,
-        'automations': USER_PERMISSIONS_FEATURES_AUTOMATIONS,
-        'calendar': USER_PERMISSIONS_FEATURES_CALENDAR,
         'webhooks': USER_PERMISSIONS_FEATURES_USER_WEBHOOKS,
     },
     'settings': {
@@ -1731,16 +1620,6 @@ USER_PERMISSIONS = DEFAULT_USER_PERMISSIONS
 ENABLE_FOLDERS = os.getenv('ENABLE_FOLDERS', 'True').lower() == 'true'
 
 FOLDER_MAX_FILE_COUNT = os.getenv('FOLDER_MAX_FILE_COUNT', '')
-
-ENABLE_CALENDAR = os.getenv('ENABLE_CALENDAR', 'True').lower() == 'true'
-
-ENABLE_AUTOMATIONS = os.getenv('ENABLE_AUTOMATIONS', 'True').lower() == 'true'
-
-AUTOMATION_MAX_COUNT = os.getenv('AUTOMATION_MAX_COUNT', '')
-
-AUTOMATION_MIN_INTERVAL = os.getenv('AUTOMATION_MIN_INTERVAL', '')
-
-AUTOMATION_AUTH_TOKEN_EXPIRES_IN = os.getenv('AUTOMATION_AUTH_TOKEN_EXPIRES_IN', '1h')
 
 ENABLE_USER_STATUS = os.getenv('ENABLE_USER_STATUS', 'True').lower() == 'true'
 
@@ -2024,35 +1903,6 @@ Output:
 #### Output:
 """
 
-
-VOICE_MODE_PROMPT_TEMPLATE = os.getenv('VOICE_MODE_PROMPT_TEMPLATE', '')
-
-ENABLE_VOICE_MODE_PROMPT = os.getenv('ENABLE_VOICE_MODE_PROMPT', 'True').lower() == 'true'
-
-DEFAULT_VOICE_MODE_PROMPT_TEMPLATE = """You are a friendly, concise voice assistant.
-
-Everything you say will be spoken aloud.
-Keep responses short, clear, and natural.
-
-STYLE:
-- Use simple words and short sentences.
-- Sound warm and conversational.
-- Avoid long explanations, lists, or complex phrasing.
-
-BEHAVIOR:
-- Give the quickest helpful answer first.
-- Offer extra detail only if needed.
-- Ask for clarification only when necessary.
-
-VOICE OPTIMIZATION:
-- Break information into small, easy-to-hear chunks.
-- Avoid dense wording or anything that sounds like reading text.
-
-ERROR HANDLING:
-- If unsure, say so briefly and offer options.
-- If something is unsafe or impossible, decline kindly and suggest a safe alternative.
-
-Stay consistent, helpful, and easy to listen to."""
 
 TOOLS_FUNCTION_CALLING_PROMPT_TEMPLATE = os.getenv('TOOLS_FUNCTION_CALLING_PROMPT_TEMPLATE', '')
 
@@ -2662,37 +2512,7 @@ DEFAULT_CONFIG = {
     'images.edit.comfyui.api_key': IMAGES_EDIT_COMFYUI_API_KEY,
     'images.edit.comfyui.workflow': IMAGES_EDIT_COMFYUI_WORKFLOW,
     'images.edit.comfyui.nodes': IMAGES_EDIT_COMFYUI_WORKFLOW_NODES,
-    'audio.stt.deepgram.api_key': DEEPGRAM_API_KEY,
-    'audio.stt.openai.api_base_url': AUDIO_STT_OPENAI_API_BASE_URL,
-    'audio.stt.openai.api_key': AUDIO_STT_OPENAI_API_KEY,
-    'audio.stt.openai.api_request_format': AUDIO_STT_OPENAI_API_REQUEST_FORMAT,
-    'audio.stt.engine': AUDIO_STT_ENGINE,
-    'audio.stt.model': AUDIO_STT_MODEL,
-    'audio.stt.supported_content_types': AUDIO_STT_SUPPORTED_CONTENT_TYPES,
-    'audio.stt.allowed_extensions': AUDIO_STT_ALLOWED_EXTENSIONS,
-    'audio.stt.azure.api_key': AUDIO_STT_AZURE_API_KEY,
-    'audio.stt.azure.region': AUDIO_STT_AZURE_REGION,
-    'audio.stt.azure.locales': AUDIO_STT_AZURE_LOCALES,
-    'audio.stt.azure.base_url': AUDIO_STT_AZURE_BASE_URL,
-    'audio.stt.azure.max_speakers': AUDIO_STT_AZURE_MAX_SPEAKERS,
-    'audio.stt.mistral.api_key': AUDIO_STT_MISTRAL_API_KEY,
-    'audio.stt.mistral.api_base_url': AUDIO_STT_MISTRAL_API_BASE_URL,
-    'audio.stt.mistral.use_chat_completions': AUDIO_STT_MISTRAL_USE_CHAT_COMPLETIONS,
-    'audio.tts.openai.api_base_url': AUDIO_TTS_OPENAI_API_BASE_URL,
-    'audio.tts.openai.api_key': AUDIO_TTS_OPENAI_API_KEY,
-    'audio.tts.openai.params': AUDIO_TTS_OPENAI_PARAMS,
-    'audio.tts.api_key': AUDIO_TTS_API_KEY,
-    'audio.tts.engine': AUDIO_TTS_ENGINE,
-    'audio.tts.model': AUDIO_TTS_MODEL,
-    'audio.tts.voice': AUDIO_TTS_VOICE,
-    'audio.tts.split_on': AUDIO_TTS_SPLIT_ON,
-    'audio.tts.azure.speech_region': AUDIO_TTS_AZURE_SPEECH_REGION,
-    'audio.tts.azure.speech_base_url': AUDIO_TTS_AZURE_SPEECH_BASE_URL,
-    'audio.tts.azure.speech_output_format': AUDIO_TTS_AZURE_SPEECH_OUTPUT_FORMAT,
-    'audio.tts.mistral.api_key': AUDIO_TTS_MISTRAL_API_KEY,
-    'audio.tts.mistral.api_base_url': AUDIO_TTS_MISTRAL_API_BASE_URL,
     'webui.url': WEBUI_URL,
-    'ui.enable_signup': ENABLE_SIGNUP,
     'ui.enable_login_form': ENABLE_LOGIN_FORM,
     'ui.enable_password_change_form': ENABLE_PASSWORD_CHANGE_FORM,
     'ui.default_locale': DEFAULT_LOCALE,
@@ -2710,11 +2530,6 @@ DEFAULT_CONFIG = {
     'user.permissions': USER_PERMISSIONS,
     'folders.enable': ENABLE_FOLDERS,
     'folders.max_file_count': FOLDER_MAX_FILE_COUNT,
-    'calendar.enable': ENABLE_CALENDAR,
-    'automations.enable': ENABLE_AUTOMATIONS,
-    'automations.max_count': AUTOMATION_MAX_COUNT,
-    'automations.min_interval': AUTOMATION_MIN_INTERVAL,
-    'automations.auth_token_expires_in': AUTOMATION_AUTH_TOKEN_EXPIRES_IN,
     'users.enable_status': ENABLE_USER_STATUS,
     'webhook_url': WEBHOOK_URL,
     'ui.enable_user_webhooks': ENABLE_USER_WEBHOOKS,
@@ -2739,8 +2554,6 @@ DEFAULT_CONFIG = {
     'task.autocomplete.enable': ENABLE_AUTOCOMPLETE_GENERATION,
     'task.autocomplete.input_max_length': AUTOCOMPLETE_GENERATION_INPUT_MAX_LENGTH,
     'task.autocomplete.prompt_template': AUTOCOMPLETE_GENERATION_PROMPT_TEMPLATE,
-    'task.voice.prompt_template': VOICE_MODE_PROMPT_TEMPLATE,
-    'task.voice.prompt.enable': ENABLE_VOICE_MODE_PROMPT,
     'task.tools.prompt_template': TOOLS_FUNCTION_CALLING_PROMPT_TEMPLATE,
     'auth.enable_api_keys': ENABLE_API_KEYS,
     'auth.api_key.endpoint_restrictions': ENABLE_API_KEYS_ENDPOINT_RESTRICTIONS,

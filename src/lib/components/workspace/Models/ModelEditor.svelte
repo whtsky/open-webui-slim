@@ -10,7 +10,6 @@
 	import { getFunctions } from '$lib/apis/functions';
 	import { getModelsDefaults } from '$lib/apis/configs';
 	import { getBaseModelTags, getModelTags } from '$lib/apis/models';
-	import { getVoices } from '$lib/apis/audio';
 
 	import AdvancedParams from '$lib/components/chat/Settings/Advanced/AdvancedParams.svelte';
 	import ModelSelector from '$lib/components/chat/ModelSelector/Selector.svelte';
@@ -29,7 +28,6 @@
 	import DefaultFeatures from './DefaultFeatures.svelte';
 	import BuiltinTools from './BuiltinTools.svelte';
 	import PromptSuggestions from './PromptSuggestions.svelte';
-	import TTSVoiceInput from './TTSVoiceInput.svelte';
 	import AccessControlModal from '../common/AccessControlModal.svelte';
 	import LockClosed from '$lib/components/icons/LockClosed.svelte';
 
@@ -107,9 +105,7 @@
 
 	let actionIds = [];
 	let accessGrants = [];
-	let tts = { voice: '' };
 	export let suggestionTags: { name: string }[] = [];
-	let voices: { id: string; name?: string }[] = [];
 
 	const getBaseModelItems = (models: any[] = []) => {
 		const currentModelId = (model as any)?.id;
@@ -138,11 +134,6 @@
 			localStorage.token
 		).catch(() => []);
 		suggestionTags = res.map((tag) => ({ name: tag }));
-	};
-
-	const loadVoices = async () => {
-		const res = await getVoices(localStorage.token).catch(() => null);
-		voices = res?.voices ?? [];
 	};
 
 	const submitHandler = async () => {
@@ -260,18 +251,6 @@
 			delete info.meta.terminalId;
 		}
 
-		if (tts.voice !== '') {
-			if (!info.meta.tts) info.meta.tts = {};
-			info.meta.tts.voice = tts.voice;
-		} else {
-			if (info.meta.tts?.voice) {
-				delete info.meta.tts.voice;
-				if (Object.keys(info.meta.tts).length === 0) {
-					delete info.meta.tts;
-				}
-			}
-		}
-
 		info.params.system = system.trim() === '' ? null : system;
 		info.params.stop = params.stop
 			? (typeof params.stop === 'string' ? params.stop.split(',') : params.stop).filter((s) =>
@@ -301,10 +280,6 @@
 		if (suggestionTags.length === 0) {
 			await loadSuggestionTags();
 		}
-		if (voices.length === 0) {
-			await loadVoices();
-		}
-
 		// Fetch admin-configured default model metadata so the editor
 		// reflects the actual defaults rather than hardcoded values
 		const modelsConfig = await getModelsDefaults(localStorage.token).catch(() => null);
@@ -389,8 +364,6 @@
 				(id) => id !== 'code_interpreter'
 			);
 			builtinTools = model?.meta?.builtinTools ?? builtinTools;
-			tts = { voice: model?.meta?.tts?.voice ?? '' };
-
 			accessGrants = model?.access_grants ?? [];
 
 			info = {
@@ -881,19 +854,6 @@
 							<BuiltinTools bind:builtinTools />
 						</div>
 					{/if}
-					<div class="my-4">
-						<div class="flex w-full justify-between mb-1">
-							<div class="self-center text-xs font-medium text-gray-500">
-								{$i18n.t('TTS Voice')}
-							</div>
-						</div>
-						<TTSVoiceInput
-							bind:value={tts.voice}
-							{voices}
-							placeholder={$i18n.t('e.g. alloy, echo, shimmer')}
-						/>
-					</div>
-
 					<hr class=" border-gray-100/30 dark:border-gray-850/30 my-4" />
 
 					<div class="my-2 flex justify-end">

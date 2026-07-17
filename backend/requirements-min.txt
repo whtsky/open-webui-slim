@@ -34,7 +34,6 @@ alembic==1.18.4
 
 redis
 
-APScheduler==3.11.2
 
 loguru==0.7.3
 asgiref==3.11.1
@@ -51,6 +50,5 @@ fake-useragent==2.2.0
 
 chromadb-client==1.5.9
 black==26.5.1
-pydub
 chardet==7.4.3
 beautifulsoup4

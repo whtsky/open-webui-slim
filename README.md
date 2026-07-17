@@ -1,6 +1,6 @@
 # Open WebUI Slim
 
-Open WebUI Slim is an opinionated fork of [Open WebUI](https://github.com/open-webui/open-webui), currently based on **v0.10.2**. It keeps the hosted/API-backed Open WebUI experience while removing local model inference and several optional products to reduce dependency, image, memory, and maintenance overhead.
+Open WebUI Slim is an opinionated fork of [Open WebUI](https://github.com/open-webui/open-webui), currently based on **v0.10.2**. It keeps the API-backed core chat experience while removing local model inference and optional products to reduce dependency, image, memory, and maintenance overhead.
 
 This fork is intended for deployments that use OpenAI-compatible or other external providers. It does not support Ollama, CUDA, or in-process ML models.
 
@@ -10,7 +10,7 @@ This fork is intended for deployments that use OpenAI-compatible or other extern
 
 - PyTorch and its ecosystem: `torch`, `torchvision`, `torchaudio`, `transformers`, `sentence-transformers`, `accelerate`, and `colbert-ai`
 - Local embedding and reranking models; embeddings must use `openai` or `azure_openai`, and reranking must use an external API or remain disabled
-- Local Whisper, browser Web Speech, Kokoro/ONNX TTS, OCR models, and their model-download/runtime dependencies
+- Local Whisper, OCR models, and their model-download/runtime dependencies
 - CUDA/GPU image variants, CUDA environment setup, and model pre-download steps
 - Embedded Chroma, whose full package pulls ONNX and Hugging Face runtimes; remote Chroma remains supported through `chromadb-client`
 
@@ -22,20 +22,24 @@ This fork is intended for deployments that use OpenAI-compatible or other extern
 - Ratings, evaluations, arena models, and leaderboards
 - Notes and Channels, including their user interfaces, APIs, socket handlers, and direct collaboration wiring
 - Playground, `/watch`, and the empty `/home` placeholder route
+- The entire speech product surface: local and remote STT/TTS endpoints, voice recording, voice calls, dictation, read-aloud controls, speech settings, and provider configuration
+- Calendar and Automations, including their runtime models, schedulers, APIs, routes, navigation, permissions, events, and settings
+- SCIM provisioning, including its API router, runtime behavior, environment configuration, and admin settings
+- Speech-only runtime dependencies (`pydub`, PyAV, `python-mimeparse`, and FFmpeg) and the Automations scheduler dependency (`APScheduler`)
 
-Historical database migrations for removed products remain in place so existing databases can still traverse the upstream migration chain. Shared syntax highlighting and authenticated code formatting are also retained; they do not execute user code.
+Historical database migrations for removed products remain in place so existing databases can still traverse the upstream migration chain. The legacy SCIM user column is likewise retained only for schema compatibility; there is no SCIM runtime behavior. Shared syntax highlighting and authenticated code formatting are also retained; they do not execute user code.
 
 ## What's Kept
 
 The fork adopts upstream v0.10.2 features that do not depend on a removed subsystem, including:
 
 - Core single- and multi-model chat through OpenAI-compatible and other external APIs
-- Automations, calendar, skills, context summaries/compaction, memories, shared folders, and knowledge directories
-- RAG with external embeddings, optional external reranking, web search, and externally configured vector databases
-- External STT through OpenAI-compatible, Deepgram, Azure, or Mistral APIs
-- External TTS through OpenAI-compatible, ElevenLabs, Azure, or Mistral APIs
-- Authentication and administration features including LDAP, OAuth/OIDC, SSO, SCIM, RBAC, and access grants
-- Image generation, pipelines, MCP/tool servers, Markdown/LaTeX rendering, PWA support, i18n, and OpenTelemetry
+- Skills, context summaries/compaction, structured output, output editing, and memories
+- Knowledge directories and RAG with external embeddings, optional external reranking, web search, and externally configured vector databases
+- Shared folders, access grants, and ordinary internal shared-chat links
+- Authentication and administration features including LDAP, OAuth/OIDC, trusted-header provisioning, SSO, RBAC, admin-created users, and unrelated admin analytics
+- Image generation, pipelines, MCP/tool servers, Markdown/LaTeX rendering, PWA support, i18n, and OpenTelemetry; terminal execution remains removed
+- Generic audio-file upload/preview and notification or greeting sounds, which have live uses independent of transcription and synthesis
 - SQLite and PostgreSQL application databases plus upstream external vector-store integrations
 
 The fork also preserves its chat scalability work on the v0.10.2 async database architecture: projected chat-list queries, normalized `chat_message` reads with JSON fallback, status-history dual writes, write-time sanitization, and batched NDJSON chat exports.
@@ -49,12 +53,16 @@ docker run -d \
   --name open-webui-slim \
   -p 3000:8080 \
   -e OPENAI_API_KEY=your_key \
+  -e WEBUI_ADMIN_EMAIL=admin@example.com \
+  -e WEBUI_ADMIN_PASSWORD='replace-with-a-strong-password' \
   -v open-webui:/app/backend/data \
   --restart unless-stopped \
   ghcr.io/OWNER/open-webui-slim:slim
 ```
 
 Replace `OWNER/open-webui-slim` with this fork's GitHub repository name.
+
+The example creates the first administrator directly on an empty database. Remove `WEBUI_ADMIN_PASSWORD` from the deployment environment after that first successful start. Public password registration cannot be enabled from the admin UI.
 
 ### Docker Compose
 
@@ -85,7 +93,13 @@ CHROMA_HTTP_PORT=8000
 CHROMA_HTTP_SSL=true
 ```
 
-Other retained vector backends can be selected with `VECTOR_DB`; see [.env.example](./.env.example) and upstream configuration documentation for provider-specific settings. Speech features remain off until an external `AUDIO_STT_ENGINE` or `AUDIO_TTS_ENGINE` is configured.
+Other retained vector backends can be selected with `VECTOR_DB`; see [.env.example](./.env.example) and upstream configuration documentation for provider-specific settings.
+
+### Registration policy
+
+Public password registration is closed by default and cannot be reopened through persistent configuration or the admin UI. The legacy `ENABLE_SIGNUP` setting and stale `ui.enable_signup=true` database values are ignored.
+
+For an interactive first-run bootstrap only, set `ENABLE_INITIAL_ADMIN_SIGNUP=true` on a fresh empty database. Exactly the first account can then be created and is made administrator; after any user exists, `POST /api/v1/auths/signup` returns HTTP 403 regardless of that environment variable or stale configuration. Administrators can still create users, and explicitly configured OAuth, LDAP, and trusted-header provisioning remain separate.
 
 ## Development and Releases
 

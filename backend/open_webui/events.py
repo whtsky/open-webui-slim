@@ -473,71 +473,11 @@ class EventDefinitions(BaseModel):
     PIPELINE_VALVES_UPDATED: EventDefinition = EventDefinition(
         name='pipeline.valves_updated', description='Pipeline valves were updated.', message='Pipeline valves updated'
     )
-    CALENDAR_CREATED: EventDefinition = EventDefinition(
-        name='calendar.created', description='A calendar was created.', message='Calendar created'
-    )
-    CALENDAR_UPDATED: EventDefinition = EventDefinition(
-        name='calendar.updated', description='A calendar was updated.', message='Calendar updated'
-    )
-    CALENDAR_DELETED: EventDefinition = EventDefinition(
-        name='calendar.deleted', description='A calendar was deleted.', message='Calendar deleted'
-    )
-    CALENDAR_DEFAULT_UPDATED: EventDefinition = EventDefinition(
-        name='calendar.default_updated',
-        description='The default calendar was updated.',
-        message='Calendar default updated',
-    )
-    CALENDAR_EVENT_CREATED: EventDefinition = EventDefinition(
-        name='calendar.event.created', description='A calendar event was created.', message='Calendar Event created'
-    )
-    CALENDAR_EVENT_UPDATED: EventDefinition = EventDefinition(
-        name='calendar.event.updated', description='A calendar event was updated.', message='Calendar Event updated'
-    )
-    CALENDAR_EVENT_DELETED: EventDefinition = EventDefinition(
-        name='calendar.event.deleted', description='A calendar event was deleted.', message='Calendar Event deleted'
-    )
-    CALENDAR_EVENT_RSVP_UPDATED: EventDefinition = EventDefinition(
-        name='calendar.event.rsvp_updated',
-        description='A calendar event RSVP was updated.',
-        message='Calendar Event rsvp updated',
-    )
-    AUTOMATION_CREATED: EventDefinition = EventDefinition(
-        name='automation.created', description='An automation was created.', message='Automation created'
-    )
-    AUTOMATION_UPDATED: EventDefinition = EventDefinition(
-        name='automation.updated', description='An automation was updated.', message='Automation updated'
-    )
-    AUTOMATION_ENABLED: EventDefinition = EventDefinition(
-        name='automation.enabled', description='An automation was enabled.', message='Automation enabled'
-    )
-    AUTOMATION_DISABLED: EventDefinition = EventDefinition(
-        name='automation.disabled', description='An automation was disabled.', message='Automation disabled'
-    )
-    AUTOMATION_DELETED: EventDefinition = EventDefinition(
-        name='automation.deleted', description='An automation was deleted.', message='Automation deleted'
-    )
-    AUTOMATION_RUN_STARTED: EventDefinition = EventDefinition(
-        name='automation.run_started', description='An automation run started.', message='Automation run started'
-    )
-    AUTOMATION_RUN_COMPLETED: EventDefinition = EventDefinition(
-        name='automation.run_completed', description='An automation run completed.', message='Automation run completed'
-    )
-    AUTOMATION_RUN_FAILED: EventDefinition = EventDefinition(
-        name='automation.run_failed', description='An automation run failed.', message='Automation run failed'
-    )
     IMAGE_GENERATED: EventDefinition = EventDefinition(
         name='image.generated', description='An image was generated.', message='Image generated'
     )
     IMAGE_EDITED: EventDefinition = EventDefinition(
         name='image.edited', description='An image was edited.', message='Image edited'
-    )
-    AUDIO_SPEECH_REQUESTED: EventDefinition = EventDefinition(
-        name='audio.speech_requested', description='Speech generation was requested.', message='Speech requested'
-    )
-    AUDIO_TRANSCRIPTION_REQUESTED: EventDefinition = EventDefinition(
-        name='audio.transcription_requested',
-        description='Audio transcription was requested.',
-        message='Transcription requested',
     )
 
 

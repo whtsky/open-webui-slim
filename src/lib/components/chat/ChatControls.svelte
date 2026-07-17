@@ -6,10 +6,9 @@
 	import { Pane, PaneResizer } from 'paneforge';
 
 	import { onMount, tick, getContext } from 'svelte';
-	import { showControls, showCallOverlay, showArtifacts, showEmbeds, user } from '$lib/stores';
+	import { showControls, showArtifacts, showEmbeds, user } from '$lib/stores';
 
 	import Controls from './Controls/Controls.svelte';
-	import CallOverlay from './MessageInput/CallOverlay.svelte';
 	import Drawer from '../common/Drawer.svelte';
 	import Artifacts from './Artifacts.svelte';
 	import Embeds from './ChatControls/Embeds.svelte';
@@ -25,12 +24,7 @@
 	export let chatFiles = [];
 	export let params = {};
 
-	export let eventTarget: EventTarget;
-	export let submitPrompt: Function;
-	export let stopResponse: Function;
 	export let showMessage: Function;
-	export let files;
-	export let modelId;
 
 	export let pane: Pane | null = null;
 
@@ -77,18 +71,8 @@
 	const handleMediaQuery = async (e) => {
 		if (e.matches) {
 			largeScreen = true;
-			if ($showCallOverlay) {
-				showCallOverlay.set(false);
-				await tick();
-				showCallOverlay.set(true);
-			}
 		} else {
 			largeScreen = false;
-			if ($showCallOverlay) {
-				showCallOverlay.set(false);
-				await tick();
-				showCallOverlay.set(true);
-			}
 			pane = null;
 		}
 	};
@@ -169,13 +153,12 @@
 		}
 		showArtifacts.set(false);
 		showEmbeds.set(false);
-		if ($showCallOverlay) showCallOverlay.set(false);
 	};
 
 	$: if (paneReady && !chatId) closeHandler();
 
 	// Helper: is a "special" full-screen panel active?
-	$: specialPanel = $showCallOverlay || $showArtifacts || $showEmbeds;
+	$: specialPanel = $showArtifacts || $showEmbeds;
 </script>
 
 {#if !largeScreen}
@@ -186,21 +169,7 @@
 			className="min-h-[100dvh] !bg-white dark:!bg-gray-850"
 		>
 			<div class="h-[100dvh] flex flex-col">
-				{#if $showCallOverlay}
-					<div
-						class="h-full max-h-[100dvh] bg-white text-gray-700 dark:bg-black dark:text-gray-300 flex justify-center"
-					>
-						<CallOverlay
-							bind:files
-							{submitPrompt}
-							{stopResponse}
-							{modelId}
-							{chatId}
-							{eventTarget}
-							on:close={() => showControls.set(false)}
-						/>
-					</div>
-				{:else if $showEmbeds}
+				{#if $showEmbeds}
 					<Embeds />
 				{:else if $showArtifacts}
 					<Artifacts {history} />
@@ -311,24 +280,12 @@
 		{#if $showControls}
 			<div class="flex max-h-full min-h-full">
 				<div
-					class="w-full {specialPanel && !$showCallOverlay
+					class="w-full {specialPanel
 						? ' '
 						: 'bg-white dark:shadow-lg dark:bg-gray-850'} z-40 pointer-events-auto overflow-y-auto scrollbar-hidden"
 					id="controls-container"
 				>
-					{#if $showCallOverlay}
-						<div class="w-full h-full flex justify-center">
-							<CallOverlay
-								bind:files
-								{submitPrompt}
-								{stopResponse}
-								{modelId}
-								{chatId}
-								{eventTarget}
-								on:close={() => showControls.set(false)}
-							/>
-						</div>
-					{:else if $showEmbeds}
+					{#if $showEmbeds}
 						<Embeds overlay={dragged} />
 					{:else if $showArtifacts}
 						<Artifacts {history} overlay={dragged} />

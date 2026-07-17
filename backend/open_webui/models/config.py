@@ -17,10 +17,15 @@ from typing import Any, ClassVar
 from fastapi.encoders import jsonable_encoder
 from open_webui.internal.db import Base, get_async_db
 from sqlalchemy import JSON, BigInteger, Column, Text, delete, select
+from sqlalchemy.exc import IntegrityError
 
 log = logging.getLogger(__name__)
 
 API_CONFIG_KEYS = ('openai.api_configs',)
+INITIAL_ADMIN_SIGNUP_CLAIM_KEY = 'auth.initial_admin_signup_claimed'
+INTERNAL_CONFIG_KEYS = frozenset({INITIAL_ADMIN_SIGNUP_CLAIM_KEY})
+RETIRED_CONFIG_KEYS = frozenset({'ui.enable_signup'})
+RETIRED_CONFIG_PREFIXES = ('audio.', 'automations.', 'calendar.', 'scim.', 'task.voice.')
 DICT_CONFIG_KEY_ALIASES = {
     'openai.api_configs': ('OPENAI_API_CONFIGS',),
     'rag.mineru_params': ('MINERU_PARAMS',),
@@ -28,7 +33,6 @@ DICT_CONFIG_KEY_ALIASES = {
     'web.search.linkup_search_params': ('LINKUP_SEARCH_PARAMS',),
     'image_generation.automatic1111.api_params': ('AUTOMATIC1111_PARAMS',),
     'image_generation.openai.params': ('IMAGES_OPENAI_API_PARAMS',),
-    'audio.tts.openai.params': ('AUDIO_TTS_OPENAI_PARAMS',),
     'models.default_metadata': ('DEFAULT_MODEL_METADATA',),
     'models.default_params': ('DEFAULT_MODEL_PARAMS',),
     'user.permissions': ('USER_PERMISSIONS',),
@@ -90,6 +94,14 @@ def _json_value(value: Any) -> Any:
     return jsonable_encoder(value)
 
 
+def _is_retired_config_key(key: str) -> bool:
+    return key in RETIRED_CONFIG_KEYS or key.startswith(RETIRED_CONFIG_PREFIXES)
+
+
+def _is_protected_config_key(key: str) -> bool:
+    return key in INTERNAL_CONFIG_KEYS or _is_retired_config_key(key)
+
+
 # ── Model ────────────────────────────────────────────────────────────────────
 
 
@@ -116,16 +128,20 @@ class Config(Base):
         enable_persistent: bool = True,
         enable_oauth_persistent: bool = False,
     ) -> None:
-        cls.DEFAULTS = dict(defaults or {})
+        cls.DEFAULTS = {key: value for key, value in (defaults or {}).items() if not _is_protected_config_key(key)}
         cls.PERSISTENT_ENABLED = enable_persistent
         cls.OAUTH_PERSISTENT_ENABLED = enable_oauth_persistent
 
     @classmethod
     def default_value(cls, key: str, default: Any = None) -> Any:
+        if _is_retired_config_key(key):
+            return default
         return cls.DEFAULTS.get(key, default)
 
     @classmethod
     def persistent_enabled_for(cls, key: str) -> bool:
+        if _is_retired_config_key(key):
+            return False
         if not cls.PERSISTENT_ENABLED:
             return False
         if key.startswith('oauth.') and not cls.OAUTH_PERSISTENT_ENABLED:
@@ -135,6 +151,8 @@ class Config(Base):
     @staticmethod
     async def get(key: str, default: Any = None) -> Any:
         """Get a config value by key. Returns default if not set."""
+        if _is_retired_config_key(key):
+            return default
         if not Config.persistent_enabled_for(key):
             return Config.default_value(key, default)
         async with get_async_db() as db:
@@ -144,6 +162,7 @@ class Config(Base):
     @staticmethod
     async def get_many(*keys: str) -> dict:
         """Get multiple config values. Returns {key: value} for keys that exist."""
+        keys = tuple(key for key in keys if not _is_retired_config_key(key))
         disabled_values = {
             key: Config.default_value(key)
             for key in keys
@@ -173,7 +192,7 @@ class Config(Base):
             return default_values
         async with get_async_db() as db:
             result = await db.execute(select(Config).where(Config.key.like(f'{namespace}.%')))
-            values = {row.key: row.value for row in result.scalars().all()}
+            values = {row.key: row.value for row in result.scalars().all() if not _is_protected_config_key(row.key)}
             values.update(default_values)
             return values
 
@@ -181,10 +200,10 @@ class Config(Base):
     async def get_all() -> dict:
         """Get all config as {key: value}."""
         if not Config.PERSISTENT_ENABLED:
-            return dict(Config.DEFAULTS)
+            return {key: value for key, value in Config.DEFAULTS.items() if not _is_protected_config_key(key)}
         async with get_async_db() as db:
             result = await db.execute(select(Config))
-            values = {row.key: row.value for row in result.scalars().all()}
+            values = {row.key: row.value for row in result.scalars().all() if not _is_protected_config_key(row.key)}
             if not Config.OAUTH_PERSISTENT_ENABLED:
                 values.update({key: value for key, value in Config.DEFAULTS.items() if key.startswith('oauth.')})
             return values
@@ -194,6 +213,8 @@ class Config(Base):
         """Upsert multiple config key-value pairs. Raises on failure."""
         persistent_updates = {}
         for key, value in updates.items():
+            if _is_protected_config_key(key):
+                continue
             value = _json_value(value)
             if Config.persistent_enabled_for(key):
                 persistent_updates[key] = value
@@ -226,10 +247,49 @@ class Config(Base):
             return False
 
     @staticmethod
-    async def clear() -> None:
-        """Delete all config rows."""
+    async def internal_exists(key: str) -> bool:
+        """Return whether a protected internal config row exists."""
+        if key not in INTERNAL_CONFIG_KEYS:
+            raise ValueError(f'Not an internal config key: {key}')
         async with get_async_db() as db:
-            await db.execute(delete(Config))
+            return await db.get(Config, key) is not None
+
+    @staticmethod
+    async def claim_internal(key: str, value: Any) -> bool:
+        """Atomically create an internal config row, returning false if claimed."""
+        if key not in INTERNAL_CONFIG_KEYS:
+            raise ValueError(f'Not an internal config key: {key}')
+        async with get_async_db() as db:
+            db.add(Config(key=key, value=_json_value(value), updated_at=int(time.time())))
+            try:
+                await db.commit()
+                return True
+            except IntegrityError:
+                await db.rollback()
+                return False
+
+    @staticmethod
+    async def ensure_internal(key: str, value: Any) -> None:
+        """Create or update a protected internal config row."""
+        if key not in INTERNAL_CONFIG_KEYS:
+            raise ValueError(f'Not an internal config key: {key}')
+        async with get_async_db() as db:
+            row = await db.get(Config, key)
+            if row:
+                row.value = _json_value(value)
+                row.updated_at = int(time.time())
+            else:
+                db.add(Config(key=key, value=_json_value(value), updated_at=int(time.time())))
+            try:
+                await db.commit()
+            except IntegrityError:
+                await db.rollback()
+
+    @staticmethod
+    async def clear() -> None:
+        """Delete mutable config rows while preserving internal security state."""
+        async with get_async_db() as db:
+            await db.execute(delete(Config).where(Config.key.notin_(tuple(INTERNAL_CONFIG_KEYS))))
             await db.commit()
 
     @staticmethod
@@ -246,6 +306,8 @@ class Config(Base):
             now = int(time.time())
             new_count = 0
             for key, value in defaults.items():
+                if _is_protected_config_key(key):
+                    continue
                 if key not in existing_keys:
                     value = _json_value(value)
                     db.add(Config(key=key, value=value, updated_at=now))

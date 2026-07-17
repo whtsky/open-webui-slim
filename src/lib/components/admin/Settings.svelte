@@ -10,7 +10,6 @@
 	import Authentication from './Settings/Authentication.svelte';
 	import General from './Settings/General.svelte';
 	import Pipelines from './Settings/Pipelines.svelte';
-	import Audio from './Settings/Audio.svelte';
 	import Images from './Settings/Images.svelte';
 	import Interface from './Settings/Interface.svelte';
 	import Models from './Settings/Models.svelte';
@@ -40,7 +39,6 @@
 			'documents',
 			'web',
 			'interface',
-			'audio',
 			'images',
 			'pipelines',
 			'db'
@@ -206,23 +204,6 @@
 			]
 		},
 		{
-			id: 'audio',
-			title: 'Audio',
-			route: '/admin/settings/audio',
-			keywords: [
-				'audio',
-				'voice',
-				'speech',
-				'tts',
-				'stt',
-				'whisper',
-				'deepgram',
-				'azure',
-				'openai',
-				'elevenlabs'
-			]
-		},
-		{
 			id: 'images',
 			title: 'Images',
 			route: '/admin/settings/images',
@@ -319,7 +300,6 @@
 		<!-- {$i18n.t('Documents')} -->
 		<!-- {$i18n.t('Web Search')} -->
 		<!-- {$i18n.t('Interface')} -->
-		<!-- {$i18n.t('Audio')} -->
 		<!-- {$i18n.t('Images')} -->
 		<!-- {$i18n.t('Pipelines')} -->
 		<!-- {$i18n.t('Database')} -->
@@ -438,20 +418,6 @@
 								clip-rule="evenodd"
 							/>
 						</svg>
-					{:else if tab.id === 'audio'}
-						<svg
-							xmlns="http://www.w3.org/2000/svg"
-							viewBox="0 0 16 16"
-							fill="currentColor"
-							class="w-4 h-4"
-						>
-							<path
-								d="M7.557 2.066A.75.75 0 0 1 8 2.75v10.5a.75.75 0 0 1-1.248.56L3.59 11H2a1 1 0 0 1-1-1V6a1 1 0 0 1 1-1h1.59l3.162-2.81a.75.75 0 0 1 .805-.124ZM12.95 3.05a.75.75 0 1 0-1.06 1.06 5.5 5.5 0 0 1 0 7.78.75.75 0 1 0 1.06 1.06 7 7 0 0 0 0-9.9Z"
-							/>
-							<path
-								d="M10.828 5.172a.75.75 0 1 0-1.06 1.06 2.5 2.5 0 0 1 0 3.536.75.75 0 1 0 1.06 1.06 4 4 0 0 0 0-5.656Z"
-							/>
-						</svg>
 					{:else if tab.id === 'images'}
 						<svg
 							xmlns="http://www.w3.org/2000/svg"
@@ -549,12 +515,6 @@
 		{:else if selectedTab === 'interface'}
 			<Interface
 				on:save={() => {
-					toast.success($i18n.t('Settings saved successfully!'));
-				}}
-			/>
-		{:else if selectedTab === 'audio'}
-			<Audio
-				saveHandler={() => {
 					toast.success($i18n.t('Settings saved successfully!'));
 				}}
 			/>

@@ -729,11 +729,6 @@ MINERU_MAX_MARKDOWN_BYTES = (
     int(os.getenv('MINERU_MAX_MARKDOWN_BYTES')) if os.getenv('MINERU_MAX_MARKDOWN_BYTES') else None
 )
 
-# When enabled, skips pydub-based preprocessing (format conversion, compression,
-# and chunked splitting) before sending files to processing engines. Useful when
-# the upstream provider handles these steps or when ffmpeg is unavailable.
-BYPASS_PYDUB_PREPROCESSING = os.getenv('BYPASS_PYDUB_PREPROCESSING', 'False').lower() == 'true'
-
 # When disabled (default), the OpenAI catch-all proxy endpoint (/{path:path})
 # is blocked. Enable only if you need direct passthrough to upstream OpenAI-
 # compatible APIs for endpoints not natively handled by Open WebUI.
@@ -765,21 +760,6 @@ ENABLE_OAUTH_TOKEN_EXCHANGE = os.getenv('ENABLE_OAUTH_TOKEN_EXCHANGE', 'False').
 # per OpenID Connect Back-Channel Logout 1.0 spec.
 # Requires Redis for JWT revocation.
 ENABLE_OAUTH_BACKCHANNEL_LOGOUT = os.getenv('ENABLE_OAUTH_BACKCHANNEL_LOGOUT', 'False').lower() == 'true'
-
-####################################
-# SCIM Configuration
-####################################
-
-ENABLE_SCIM = os.getenv('ENABLE_SCIM', os.getenv('SCIM_ENABLED', 'False')).lower() == 'true'
-SCIM_TOKEN = os.getenv('SCIM_TOKEN', '')
-SCIM_AUTH_PROVIDER = os.getenv('SCIM_AUTH_PROVIDER', '')
-
-if ENABLE_SCIM and not SCIM_AUTH_PROVIDER:
-    log.warning(
-        'SCIM is enabled but SCIM_AUTH_PROVIDER is not set. '
-        "Set SCIM_AUTH_PROVIDER to the OAuth provider name (e.g. 'microsoft', 'oidc') "
-        'to enable externalId storage.'
-    )
 
 ####################################
 # LICENSE_KEY

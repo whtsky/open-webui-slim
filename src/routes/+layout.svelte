@@ -279,38 +279,6 @@
 		const type = event?.data?.type ?? null;
 		const data = event?.data?.data ?? null;
 
-		// Calendar alerts are not chat-scoped, handle before chat_id checks
-		if (type === 'calendar:alert' && data) {
-			const timeStr =
-				data.minutes_until <= 0
-					? $i18n.t('Starting now')
-					: data.minutes_until === 1
-						? $i18n.t('Starting in 1 minute')
-						: $i18n.t('Starting in {{count}} minutes', { count: data.minutes_until });
-
-			toast.custom(NotificationToast, {
-				componentProps: {
-					onClick: () => {
-						goto('/calendar');
-					},
-					title: data.title,
-					content: timeStr
-				},
-				duration: 30000,
-				unstyled: true
-			});
-
-			if ($isLastActiveTab) {
-				if ($settings?.notificationEnabled ?? false) {
-					new Notification(`${data.title} • Open WebUI`, {
-						body: timeStr,
-						icon: `${WEBUI_BASE_URL}/static/favicon.png`
-					});
-				}
-			}
-			return;
-		}
-
 		// Session-targeted RPC calls (tool calls and direct completion)
 		// must ALWAYS be processed regardless of active chat or tab visibility,
 		// because the backend's sio.call blocks waiting for our callback response.
@@ -550,11 +518,6 @@
 			return;
 		}
 		if (event.type === 'query' && (event.data?.query || event.data?.files?.length)) {
-			desktopEvent.set(event);
-			await goto('/');
-			return;
-		}
-		if (event.type === 'call') {
 			desktopEvent.set(event);
 			await goto('/');
 			return;

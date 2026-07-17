@@ -32,7 +32,7 @@ async def post_webhook(name: str, url: str, message: str, event_data: dict, desc
         log.debug(f'post_webhook: {url}, {message}, {event_data}')
         # Block private-IP / loopback / cloud-metadata targets — the URL is
         # caller-controlled (user notification settings under
-        # ENABLE_USER_WEBHOOKS, automation notification triggers).
+        # ENABLE_USER_WEBHOOKS and notification triggers).
         await asyncio.to_thread(validate_url, url)
         payload = {}
 

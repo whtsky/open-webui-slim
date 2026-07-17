@@ -87,8 +87,7 @@ from open_webui.env import (
     ENABLE_OAUTH_BACKCHANNEL_LOGOUT,
     ENABLE_OTEL,
     ENABLE_PUBLIC_ACTIVE_USERS_COUNT,
-    # SCIM
-    ENABLE_SCIM,
+    ENABLE_INITIAL_ADMIN_SIGNUP,
     ENABLE_SIGNUP_PASSWORD_CONFIRMATION,
     ENABLE_STAR_SESSIONS_MIDDLEWARE,
     ENABLE_VERSION_UPDATE_CHECK,
@@ -104,7 +103,6 @@ from open_webui.env import (
     REDIS_URL,
     RESET_CONFIG_ON_START,
     SAFE_MODE,
-    SCIM_TOKEN,
     VERSION,
     # Admin Account Runtime Creation
     WEBUI_ADMIN_EMAIL,
@@ -127,16 +125,13 @@ from open_webui.events import (
 )
 from open_webui.internal.db import engine, get_async_session
 from open_webui.models.chats import ChatForm, Chats
-from open_webui.models.config import Config
+from open_webui.models.config import Config, INITIAL_ADMIN_SIGNUP_CLAIM_KEY
 from open_webui.models.functions import Functions
 from open_webui.models.models import Models
 from open_webui.models.users import Users
 from open_webui.routers import (
     analytics,
-    audio,
     auths,
-    automations,
-    calendar,
     chats,
     configs,
     files,
@@ -151,7 +146,6 @@ from open_webui.routers import (
     pipelines,
     prompts,
     retrieval,
-    scim,
     skills,
     tasks,
     tools,
@@ -255,6 +249,11 @@ class SPAStaticFiles(StaticFiles):
             return await super().get_response(path, scope)
         except (HTTPException, StarletteHTTPException) as ex:
             if ex.status_code == 404:
+                request_path = scope.get('path', '')
+                if request_path == '/api' or request_path.startswith('/api/'):
+                    # API misses must remain real 404s instead of returning the
+                    # browser application's index page with a misleading 200.
+                    raise ex
                 if path.endswith('.js'):
                     # Return 404 for javascript files
                     raise ex
@@ -308,9 +307,10 @@ async def lifespan(app: FastAPI):
 
     # Create admin account from env vars if specified and no users exist
     if WEBUI_ADMIN_EMAIL and WEBUI_ADMIN_PASSWORD:
-        if await create_admin_user(WEBUI_ADMIN_EMAIL, WEBUI_ADMIN_PASSWORD, WEBUI_ADMIN_NAME):
-            # Disable signup since we now have an admin
-            await Config.upsert({'ui.enable_signup': False})
+        await create_admin_user(WEBUI_ADMIN_EMAIL, WEBUI_ADMIN_PASSWORD, WEBUI_ADMIN_NAME)
+
+    if await Users.has_users():
+        await Config.ensure_internal(INITIAL_ADMIN_SIGNUP_CLAIM_KEY, True)
 
     if SAFE_MODE:
         await Functions.deactivate_all_functions()
@@ -331,10 +331,6 @@ async def lifespan(app: FastAPI):
 
     asyncio.create_task(periodic_usage_pool_cleanup())
     asyncio.create_task(periodic_session_pool_cleanup())
-
-    from open_webui.utils.automations import scheduler_worker_loop
-
-    asyncio.create_task(scheduler_worker_loop(app))
 
     if await Config.get('models.base_models_cache'):
         try:
@@ -470,15 +466,6 @@ app.state.TOOL_SERVERS = []
 
 ########################################
 #
-# SCIM
-#
-########################################
-
-app.state.ENABLE_SCIM = ENABLE_SCIM
-app.state.SCIM_TOKEN = SCIM_TOKEN
-
-########################################
-#
 # MODELS
 #
 ########################################
@@ -609,13 +596,6 @@ async def initialize_runtime_config(app: FastAPI):
 
 ########################################
 #
-# AUDIO
-#
-########################################
-
-
-########################################
-#
 # TASKS
 #
 ########################################
@@ -668,7 +648,6 @@ app.include_router(pipelines.router, prefix='/api/v1/pipelines', tags=['pipeline
 app.include_router(tasks.router, prefix='/api/v1/tasks', tags=['tasks'])
 app.include_router(images.router, prefix='/api/v1/images', tags=['images'])
 
-app.include_router(audio.router, prefix='/api/v1/audio', tags=['audio'])
 app.include_router(retrieval.router, prefix='/api/v1/retrieval', tags=['retrieval'])
 
 app.include_router(configs.router, prefix='/api/v1/configs', tags=['configs'])
@@ -694,12 +673,6 @@ app.include_router(functions.router, prefix='/api/v1/functions', tags=['function
 if ENABLE_ADMIN_ANALYTICS:
     app.include_router(analytics.router, prefix='/api/v1/analytics', tags=['analytics'])
 app.include_router(utils.router, prefix='/api/v1/utils', tags=['utils'])
-app.include_router(automations.router, prefix='/api/v1/automations', tags=['automations'])
-app.include_router(calendar.router, prefix='/api/v1/calendars', tags=['calendars'])
-
-# SCIM 2.0 API for identity management
-if ENABLE_SCIM:
-    app.include_router(scim.router, prefix='/api/v1/scim/v2', tags=['scim'])
 
 
 try:
@@ -1504,8 +1477,8 @@ async def chat_completion(
 generate_chat_completions = chat_completion
 generate_chat_completion = chat_completion
 
-# Expose as app.state so internal callers (e.g. automations) can
-# use the full pipeline without importing from main.py (avoids circular deps).
+# Expose as app.state so internal callers can use the full pipeline without
+# importing from main.py (avoids circular dependencies).
 app.state.CHAT_COMPLETION_HANDLER = chat_completion
 
 
@@ -1687,22 +1660,23 @@ async def get_app_config(request: Request):
 
     onboarding = False
     if user is None:
-        onboarding = not await Users.has_users()
+        onboarding = (
+            ENABLE_INITIAL_ADMIN_SIGNUP
+            and not await Users.has_users()
+            and not await Config.internal_exists(INITIAL_ADMIN_SIGNUP_CLAIM_KEY)
+        )
 
     license_metadata = getattr(app.state, 'LICENSE_METADATA', None)
     user_count = await Users.get_num_users() if license_metadata else None
     config = await Config.get_many(
         'oauth.auto_redirect',
         'ldap.enable',
-        'ui.enable_signup',
         'ui.enable_login_form',
         'auth.enable_api_keys',
         'ui.enable_password_change_form',
         'direct.enable',
         'folders.enable',
         'folders.max_file_count',
-        'calendar.enable',
-        'automations.enable',
         'web.search.enable',
         'web.search.confirmation.enable',
         'web.search.confirmation.content',
@@ -1716,10 +1690,6 @@ async def get_app_config(request: Request):
         'ui.default_models',
         'ui.default_pinned_models',
         'ui.prompt_suggestions',
-        'audio.tts.engine',
-        'audio.tts.voice',
-        'audio.tts.split_on',
-        'audio.stt.engine',
         'rag.file.max_size',
         'rag.file.max_count',
         'file.image_compression_width',
@@ -1746,7 +1716,7 @@ async def get_app_config(request: Request):
             'auth_trusted_header': bool(WEBUI_AUTH_TRUSTED_EMAIL_HEADER),
             'enable_signup_password_confirmation': ENABLE_SIGNUP_PASSWORD_CONFIRMATION,
             'enable_ldap': config.get('ldap.enable'),
-            'enable_signup': config.get('ui.enable_signup'),
+            'enable_signup': False,
             'enable_login_form': config.get('ui.enable_login_form'),
             'enable_websocket': ENABLE_WEBSOCKET_SUPPORT,
             # --- Authenticated: only consumed by logged-in frontend ---
@@ -1760,8 +1730,6 @@ async def get_app_config(request: Request):
                     'enable_direct_connections': config.get('direct.enable'),
                     'enable_folders': config.get('folders.enable'),
                     'folder_max_file_count': config.get('folders.max_file_count'),
-                    'enable_calendar': config.get('calendar.enable'),
-                    'enable_automations': config.get('automations.enable'),
                     'enable_web_search': config.get('web.search.enable'),
                     'enable_web_search_confirmation': config.get('web.search.confirmation.enable'),
                     'web_search_confirmation_content': config.get('web.search.confirmation.content'),
@@ -1794,16 +1762,6 @@ async def get_app_config(request: Request):
                 'default_pinned_models': config.get('ui.default_pinned_models'),
                 'default_prompt_suggestions': config.get('ui.prompt_suggestions'),
                 **({'user_count': user_count} if user_count is not None else {}),
-                'audio': {
-                    'tts': {
-                        'engine': config.get('audio.tts.engine'),
-                        'voice': config.get('audio.tts.voice'),
-                        'split_on': config.get('audio.tts.split_on'),
-                    },
-                    'stt': {
-                        'engine': config.get('audio.stt.engine'),
-                    },
-                },
                 'file': {
                     'max_size': config.get('rag.file.max_size'),
                     'max_count': config.get('rag.file.max_count'),

@@ -38,11 +38,9 @@ from open_webui.models.files import (
 from open_webui.models.knowledge import Knowledges
 from open_webui.models.users import Users
 from open_webui.retrieval.vector.async_client import ASYNC_VECTOR_DB_CLIENT
-from open_webui.routers.audio import transcribe
 from open_webui.routers.retrieval import ProcessFileForm, process_file
 from open_webui.storage.provider import Storage
 from open_webui.utils.auth import get_admin_user, get_verified_user
-from open_webui.utils.misc import strict_match_mime_type
 from pydantic import BaseModel
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -123,36 +121,16 @@ async def process_uploaded_file(
                 if _is_text_file(file_path):
                     content_type = 'text/plain'
 
-            stt_supported = await Config.get('audio.stt.supported_content_types', [])
-
-            if content_type and strict_match_mime_type(stt_supported, content_type):
-                # Audio / STT-supported files → transcribe then index
-                file_path_processed = await asyncio.to_thread(Storage.get_file, file_path)
-                result = await transcribe(
-                    request,
-                    file_path_processed,
-                    file_metadata,
-                    user,
-                )
-                await process_file(
-                    request,
-                    ProcessFileForm(file_id=file_item.id, content=result.get('text', '')),
-                    user=user,
-                    db=db_session,
-                )
-
-            elif (
+            if (
                 content_type
-                and content_type.startswith(('image/', 'video/'))
+                and content_type.startswith(('audio/', 'image/', 'video/'))
                 and await Config.get('rag.content_extraction_engine') != 'external'
             ):
                 # Media files without an external extraction engine
-                if content_type.startswith('video/'):
-                    # Videos are stored as-is for downstream multimodal
-                    # processing (Tools, vision models). Attempting text
-                    # extraction causes "Timeout reached while detecting
-                    # encoding" errors.
-                    log.info(f'Video file detected ({content_type}), skipping text extraction')
+                if content_type.startswith(('audio/', 'video/')):
+                    # Audio and video are stored as-is for downstream multimodal
+                    # consumers. Open WebUI Slim does not transcribe them.
+                    log.info(f'Media file detected ({content_type}), skipping text extraction')
                     await Files.update_file_data_by_id(
                         file_item.id,
                         {'status': 'completed'},

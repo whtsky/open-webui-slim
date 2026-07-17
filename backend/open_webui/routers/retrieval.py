@@ -1651,13 +1651,12 @@ async def process_file(
 
             if form_data.content:
                 # Update the content in the file
-                # Usage: /files/{file_id}/data/content/update, /files/ (audio file upload pipeline)
+                # Usage: /files/{file_id}/data/content/update
 
                 try:
                     # /files/{file_id}/data/content/update
                     await ASYNC_VECTOR_DB_CLIENT.delete_collection(collection_name=f'file-{file.id}')
                 except Exception:
-                    # Audio file upload pipeline
                     pass
 
                 docs = [

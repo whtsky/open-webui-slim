@@ -235,7 +235,7 @@ async def generate_function_chat_completion(request, form_data, user, models: di
                 oauth_session_id,
             )
 
-        # Fallback: no cookie (automation, API key, etc.) — use most recent session
+        # Fallback: no cookie (background job, API key, etc.) — use most recent session
         if oauth_token is None:
             from open_webui.models.oauth_sessions import OAuthSessions
 

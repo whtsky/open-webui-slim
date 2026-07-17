@@ -28,9 +28,7 @@
 		banners,
 		user,
 		socket,
-		audioQueue,
 		showControls,
-		showCallOverlay,
 		currentChatPage,
 		temporaryChatEnabled,
 		mobile,
@@ -53,7 +51,6 @@
 	import {
 		convertMessagesToHistory,
 		copyToClipboard,
-		getMessageContentParts,
 		createMessagesList,
 		sanitizeHistory,
 		getPromptVariables,
@@ -62,7 +59,6 @@
 		getCodeBlockContents,
 		isYoutubeUrl
 	} from '$lib/utils';
-	import { AudioQueue } from '$lib/utils/audio';
 	import { getOutputText } from './Messages/structuredOutput';
 
 	import {
@@ -808,12 +804,6 @@
 		savedModelIds();
 	}
 
-	const stopAudio = () => {
-		try {
-			$audioQueue?.stop();
-		} catch {}
-	};
-
 	const hasPendingAssistantLeaf = () =>
 		Object.values(history.messages).some(
 			(message) =>
@@ -845,18 +835,11 @@
 		$socket?.on('events', chatEventHandler);
 		$socket?.on('connect', handleSocketConnect);
 
-		$audioQueue?.destroy();
-
-		const audioQueueInstance = new AudioQueue(document.getElementById('audioElement'));
-		audioQueue.set(audioQueueInstance);
-
 		const pageSubscribe = page.subscribe(async (p) => {
 			if (p.url.pathname === '/') {
 				await tick();
 				initNewChat();
 			}
-
-			stopAudio();
 		});
 
 		const showControlsSubscribe = showControls.subscribe(async (value) => {
@@ -874,7 +857,6 @@
 			}
 
 			if (!value) {
-				showCallOverlay.set(false);
 				showArtifacts.set(false);
 				showEmbeds.set(false);
 			}
@@ -944,8 +926,6 @@
 				$socket?.off('events', chatEventHandler);
 				$socket?.off('connect', handleSocketConnect);
 				dismissContextCompactionToast();
-				audioQueueInstance?.destroy();
-				audioQueue.set(null);
 			} catch (e) {
 				console.error(e);
 			}
@@ -1037,20 +1017,9 @@
 				throw new Error('Created file is empty');
 			}
 
-			// If the file is an audio file, provide the language for STT.
-			let metadata = null;
-			if (
-				(file.type.startsWith('audio/') || file.type.startsWith('video/')) &&
-				$settings?.audio?.stt?.language
-			) {
-				metadata = {
-					language: $settings?.audio?.stt?.language
-				};
-			}
-
 			// Upload file to server
 			console.log('Uploading file to server...');
-			const uploadedFile = await uploadFile(localStorage.token, file, metadata);
+			const uploadedFile = await uploadFile(localStorage.token, file);
 
 			if (!uploadedFile) {
 				throw new Error('Server returned null response for file upload');
@@ -1149,38 +1118,6 @@
 	};
 
 	$: onHistoryChange(history);
-
-	const dispatchCallOverlayAudio = (message, final = false) => {
-		if (!$showCallOverlay) {
-			return;
-		}
-
-		const messageContentParts = getMessageContentParts(
-			getOutputText(message?.output) || removeAllDetails(message?.content ?? ''),
-			$config?.audio?.tts?.split_on ?? 'punctuation'
-		);
-		if (!final) {
-			messageContentParts.pop();
-		}
-
-		const nextContentPart = messageContentParts.at(-1) ?? '';
-		if (!nextContentPart || (!final && nextContentPart === message.lastSentence)) {
-			return;
-		}
-
-		if (!final) {
-			message.lastSentence = nextContentPart;
-		}
-
-		eventTarget.dispatchEvent(
-			new CustomEvent('chat', {
-				detail: {
-					id: message.id,
-					content: nextContentPart
-				}
-			})
-		);
-	};
 
 	const getContents = () => {
 		const messages = history ? createMessagesList(history, history.currentId) : [];
@@ -1355,7 +1292,6 @@
 		if ($mobile) {
 			await showControls.set(false);
 		}
-		await showCallOverlay.set(false);
 		await showArtifacts.set(false);
 
 		if ($page.url.pathname.includes('/c/')) {
@@ -1417,25 +1353,12 @@
 			}
 		}
 
-		if ($page.url.searchParams.get('call') === 'true') {
-			showCallOverlay.set(true);
-			showControls.set(true);
-		}
-
-		// Consume one-shot desktop event (e.g. Spotlight query, call shortcut)
+		// Consume one-shot desktop event (for example a Spotlight query).
 		if ($desktopEvent) {
 			const event = $desktopEvent;
 			desktopEvent.set(null);
 
-			if (event.type === 'call') {
-				// Defer to next macrotask so the call overlay isn't clobbered by
-				// showControlsSubscribe's initial callback (value=false → set(false))
-				// which runs as a pending microtask after this function.
-				setTimeout(() => {
-					showCallOverlay.set(true);
-					showControls.set(true);
-				}, 0);
-			} else if (event.type === 'query') {
+			if (event.type === 'query') {
 				const query = event.data?.query;
 				const eventFiles = event.data?.files;
 
@@ -1859,7 +1782,6 @@
 		if (output) {
 			message.output = output;
 			message.content = getOutputText(output);
-			dispatchCallOverlayAudio(message);
 		}
 
 		if (error) {
@@ -1874,7 +1796,6 @@
 			if (choices[0]?.message?.content) {
 				// Non-stream response
 				message.content += choices[0]?.message?.content;
-				dispatchCallOverlayAudio(message);
 			} else {
 				// Stream response
 				let value = choices[0]?.delta?.content ?? '';
@@ -1886,7 +1807,6 @@
 					if (navigator.vibrate && ($settings?.hapticFeedback ?? false)) {
 						navigator.vibrate(5);
 					}
-					dispatchCallOverlayAudio(message);
 				}
 			}
 		}
@@ -1898,7 +1818,6 @@
 			if (navigator.vibrate && ($settings?.hapticFeedback ?? false)) {
 				navigator.vibrate(5);
 			}
-			dispatchCallOverlayAudio(message);
 		}
 
 		if (selected_model_id) {
@@ -1920,13 +1839,6 @@
 				copyToClipboard(visibleContent);
 			}
 
-			if ($settings.responseAutoPlayback && !$showCallOverlay) {
-				await tick();
-				document.getElementById(`speak-button-${message.id}`)?.click();
-			}
-
-			// Emit chat event for TTS (only when call overlay is active)
-			dispatchCallOverlayAudio(message, true);
 			eventTarget.dispatchEvent(
 				new CustomEvent('chat:finish', {
 					detail: {
@@ -2007,11 +1919,8 @@
 
 		history.currentId = userMessageId;
 
-		// focus on chat input (skip during voice call to avoid triggering mobile keyboard)
-		if (!$showCallOverlay) {
-			const chatInput = document.getElementById('chat-input');
-			chatInput?.focus();
-		}
+		const chatInput = document.getElementById('chat-input');
+		chatInput?.focus();
 
 		saveSessionSelectedModels();
 
@@ -2261,7 +2170,6 @@
 
 		if ($config?.features)
 			features = {
-				voice: $showCallOverlay,
 				image_generation:
 					$config?.features?.enable_image_generation &&
 					($user?.role === 'admin' || $user?.permissions?.features?.image_generation)
@@ -2969,8 +2877,6 @@
 	</title>
 </svelte:head>
 
-<audio id="audioElement" style="display: none;"></audio>
-
 <WebSearchConfirmDialog
 	bind:show={showWebSearchConfirm}
 	title={$i18n.t('Use Web Search?')}
@@ -3295,10 +3201,8 @@
 					bind:history
 					bind:chatFiles
 					bind:params
-					bind:files
 					bind:pane={controlPane}
 					chatId={$chatId}
-					modelId={selectedModelIds?.at(0) ?? null}
 					models={selectedModelIds.reduce((a, e, i, arr) => {
 						const model = $models.find((m) => m.id === e);
 						if (model) {
@@ -3306,10 +3210,7 @@
 						}
 						return a;
 					}, [])}
-					submitPrompt={submitHandler}
-					{stopResponse}
 					{showMessage}
-					{eventTarget}
 				/>
 			</PaneGroup>
 		</div>

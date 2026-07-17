@@ -68,6 +68,7 @@ class User(Base):  # identity & profile
     info = Column(JSON, nullable=True)
     settings = Column(JSON, nullable=True)
     oauth = Column(JSON, nullable=True)
+    # Retained solely for databases that traversed the historical migration.
     scim = Column(JSON, nullable=True)
 
     # Timestamps (epoch seconds)
@@ -105,7 +106,6 @@ class UserModel(BaseModel):
     settings: UserSettings | None = None
 
     oauth: dict | None = None
-    scim: dict | None = None
 
     last_active_at: int  # timestamp in epoch
     updated_at: int  # timestamp in epoch
@@ -364,25 +364,6 @@ class UsersTable:
             row = (await session.execute(query)).scalars().first()
             return UserModel.model_validate(row) if row else None
 
-    async def get_user_by_scim_external_id(
-        self,
-        provider: str,
-        external_id: str,
-        db: AsyncSession | None = None,
-    ) -> UserModel | None:
-        """Look up a user by SCIM provider + external ID (dialect-aware JSON filter)."""
-        async with get_async_db_context(db) as session:
-            dialect = session.bind.dialect.name
-            query = select(User)
-            if dialect == 'sqlite':
-                scim_match = User.scim.contains({provider: {'external_id': external_id}})
-                query = query.where(scim_match)
-            elif dialect == 'postgresql':
-                scim_match = User.scim[provider].cast(JSONB)['external_id'].astext == external_id
-                query = query.where(scim_match)
-            row = (await session.execute(query)).scalars().first()
-            return UserModel.model_validate(row) if row else None
-
     async def get_users(
         self,
         filter: dict | None = None,
@@ -627,25 +608,6 @@ class UsersTable:
             oauth = dict(user.oauth or {})
             oauth[provider] = {'sub': sub}
             user.oauth = oauth
-            await session.commit()
-            await session.refresh(user)
-            return UserModel.model_validate(user)
-
-    async def update_user_scim_by_id(
-        self,
-        id: str,
-        provider: str,
-        external_id: str,
-        db: AsyncSession | None = None,
-    ) -> UserModel | None:
-        """Update or insert a SCIM provider/external_id pair into the user's scim JSON field."""
-        async with get_async_db_context(db) as session:
-            user = await session.get(User, id)
-            if not user:
-                return None
-            scim = dict(user.scim or {})
-            scim[provider] = {'external_id': external_id}
-            user.scim = scim
             await session.commit()
             await session.refresh(user)
             return UserModel.model_validate(user)

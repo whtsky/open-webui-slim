@@ -17,12 +17,10 @@
 		settings,
 		models,
 		config,
-		showCallOverlay,
 		tools,
 		skills,
 		toolServers,
 		user as _user,
-		showControls,
 		showSettings,
 		temporaryChatEnabled
 	} from '$lib/stores';
@@ -55,7 +53,6 @@
 	import { getSuggestionRenderer } from '../common/RichTextInput/suggestions';
 
 	import InputMenu from './MessageInput/InputMenu.svelte';
-	import VoiceRecording from './MessageInput/VoiceRecording.svelte';
 
 	import ToolServersModal from './ToolServersModal.svelte';
 	import SkillsModal from './SkillsModal.svelte';
@@ -74,7 +71,6 @@
 	import Sparkles from '../icons/Sparkles.svelte';
 
 	import InputVariablesModal from './MessageInput/InputVariablesModal.svelte';
-	import Voice from '../icons/Voice.svelte';
 	import IntegrationsMenu from './MessageInput/IntegrationsMenu.svelte';
 	import Component from '../icons/Component.svelte';
 	import PlusAlt from '../icons/PlusAlt.svelte';
@@ -329,9 +325,7 @@
 			}
 
 			chatInputElement?.setText(text);
-			if (!$showCallOverlay) {
-				chatInputElement?.focus();
-			}
+			chatInputElement?.focus();
 
 			if (text !== '') {
 				text = await inputVariableHandler(text);
@@ -407,8 +401,6 @@
 	let showSkills = false;
 
 	let loaded = false;
-	let recording = false;
-
 	let isComposing = false;
 	// Safari has a bug where compositionend is not triggered correctly #16615
 	// when using the virtual keyboard on iOS.
@@ -593,19 +585,8 @@
 
 		if (!$temporaryChatEnabled) {
 			try {
-				// If the file is an audio file, provide the language for STT.
-				let metadata = null;
-				if (
-					(file.type.startsWith('audio/') || file.type.startsWith('video/')) &&
-					$settings?.audio?.stt?.language
-				) {
-					metadata = {
-						language: $settings?.audio?.stt?.language
-					};
-				}
-
 				// During the file upload, file content is automatically extracted.
-				const uploadedFile = await uploadFile(localStorage.token, file, metadata, process);
+				const uploadedFile = await uploadFile(localStorage.token, file, null, process);
 
 				if (uploadedFile) {
 					console.log('File upload completed:', {
@@ -874,19 +855,6 @@
 	const onKeyDown = (e: KeyboardEvent) => {
 		if (e.key === 'Shift') {
 			shiftKey = true;
-		}
-
-		// Cmd/Ctrl+Shift+L to toggle dictation
-		if (e.key.toLowerCase() === 'l' && (e.metaKey || e.ctrlKey) && e.shiftKey) {
-			e.preventDefault();
-			if (recording) {
-				// Confirm and stop recording
-				document.getElementById('confirm-recording-button')?.click();
-			} else {
-				// Start recording (same logic as voice-input-button click)
-				document.getElementById('voice-input-button')?.click();
-			}
-			return;
 		}
 
 		if (e.key === 'Escape') {
@@ -1201,33 +1169,8 @@
 						}}
 					/>
 
-					<div class={recording ? '' : 'hidden'}>
-						<VoiceRecording
-							bind:recording
-							onCancel={async () => {
-								recording = false;
-
-								await tick();
-								document.getElementById('chat-input')?.focus();
-							}}
-							onConfirm={async (data) => {
-								const { text, filename } = data;
-
-								recording = false;
-
-								await tick();
-								await insertTextAtCursor(`${text}`);
-								await tick();
-								document.getElementById('chat-input')?.focus();
-
-								if ($settings?.speechAutoSend ?? false) {
-									dispatch('submit', prompt);
-								}
-							}}
-						/>
-					</div>
 					<form
-						class="w-full flex flex-col gap-1.5 {recording ? 'hidden' : ''}"
+						class="w-full flex flex-col gap-1.5"
 						on:submit|preventDefault={() => {
 							// check if selectedModels support image input
 							dispatch('submit', prompt);
@@ -1903,142 +1846,39 @@
 											</Tooltip>
 										</div>
 									{:else}
-										{#if !history?.currentId || history.messages[history.currentId]?.done == true}
-											{#if $_user?.role === 'admin' || ($_user?.permissions?.chat?.stt ?? true)}
-												<!-- {$i18n.t('Record voice')} -->
-												<Tooltip content={$i18n.t('Dictate')}>
-													<button
-														id="voice-input-button"
-														class=" text-gray-600 dark:text-gray-300 hover:text-gray-700 dark:hover:text-gray-200 transition rounded-full p-1.5 self-center mr-0.5"
-														type="button"
-														on:click={async () => {
-															try {
-																let stream = await navigator.mediaDevices
-																	.getUserMedia({ audio: true })
-																	.catch(function (err) {
-																		toast.error(
-																			$i18n.t(
-																				`Permission denied when accessing microphone: {{error}}`,
-																				{
-																					error: err
-																				}
-																			)
-																		);
-																		return null;
-																	});
-
-																if (stream) {
-																	recording = true;
-																	const tracks = stream.getTracks();
-																	tracks.forEach((track) => track.stop());
-																}
-																stream = null;
-															} catch {
-																toast.error($i18n.t('Permission denied when accessing microphone'));
-															}
-														}}
-														aria-label="Voice Input"
-													>
+										<div class=" flex items-center">
+											<Tooltip
+												content={uploadPending
+													? $i18n.t('Waiting for upload...')
+													: $i18n.t('Send message')}
+											>
+												<button
+													id="send-message-button"
+													class="{!(prompt === '' && files.length === 0) || uploadPending
+														? 'bg-black text-white hover:bg-gray-900 dark:bg-white dark:text-black dark:hover:bg-gray-100 '
+														: 'text-white bg-gray-200 dark:text-gray-900 dark:bg-gray-700 disabled'} transition rounded-full p-1.5 self-center"
+													type="submit"
+													disabled={(prompt === '' && files.length === 0) || uploadPending}
+												>
+													{#if uploadPending}
+														<Spinner className="size-5" />
+													{:else}
 														<svg
 															xmlns="http://www.w3.org/2000/svg"
-															viewBox="0 0 20 20"
+															viewBox="0 0 16 16"
 															fill="currentColor"
-															class="size-5 translate-y-[0.5px]"
+															class="size-5"
 														>
-															<path d="M7 4a3 3 0 016 0v6a3 3 0 11-6 0V4z" />
 															<path
-																d="M5.5 9.643a.75.75 0 00-1.5 0V10c0 3.06 2.29 5.585 5.25 5.954V17.5h-1.5a.75.75 0 000 1.5h4.5a.75.75 0 000-1.5h-1.5v-1.546A6.001 6.001 0 0016 10v-.357a.75.75 0 00-1.5 0V10a4.5 4.5 0 01-9 0v-.357z"
+																fill-rule="evenodd"
+																d="M8 14a.75.75 0 0 1-.75-.75V4.56L4.03 7.78a.75.75 0 0 1-1.06-1.06l4.5-4.5a.75.75 0 0 1 1.06 0l4.5 4.5a.75.75 0 0 1-1.06 1.06L8.75 4.56v8.69A.75.75 0 0 1 8 14Z"
+																clip-rule="evenodd"
 															/>
 														</svg>
-													</button>
-												</Tooltip>
-											{/if}
-										{/if}
-
-										{#if prompt === '' && files.length === 0 && ($_user?.role === 'admin' || ($_user?.permissions?.chat?.call ?? true))}
-											<div class=" flex items-center">
-												<!-- {$i18n.t('Call')} -->
-												<Tooltip content={$i18n.t('Voice mode')}>
-													<button
-														class=" bg-black text-white hover:bg-gray-900 dark:bg-white dark:text-black dark:hover:bg-gray-100 transition rounded-full p-1.5 self-center"
-														type="button"
-														on:click={async () => {
-															if (selectedModels.length > 1) {
-																toast.error($i18n.t('Select only one model to call'));
-
-																return;
-															}
-
-															if (!$config.audio.stt.engine || !$config.audio.tts.engine) {
-																toast.error(
-																	$i18n.t('Voice mode requires external STT and TTS providers')
-																);
-
-																return;
-															}
-															// check if user has access to getUserMedia
-															try {
-																let stream = await navigator.mediaDevices.getUserMedia({
-																	audio: true
-																});
-																// If the user grants the permission, proceed to show the call overlay
-
-																if (stream) {
-																	const tracks = stream.getTracks();
-																	tracks.forEach((track) => track.stop());
-																}
-
-																stream = null;
-																showCallOverlay.set(true);
-																showControls.set(true);
-															} catch (err) {
-																// If the user denies the permission or an error occurs, show an error message
-																toast.error(
-																	$i18n.t('Permission denied when accessing media devices')
-																);
-															}
-														}}
-														aria-label={$i18n.t('Voice mode')}
-													>
-														<Voice className="size-5" strokeWidth="2.5" />
-													</button>
-												</Tooltip>
-											</div>
-										{:else}
-											<div class=" flex items-center">
-												<Tooltip
-													content={uploadPending
-														? $i18n.t('Waiting for upload...')
-														: $i18n.t('Send message')}
-												>
-													<button
-														id="send-message-button"
-														class="{!(prompt === '' && files.length === 0) || uploadPending
-															? 'bg-black text-white hover:bg-gray-900 dark:bg-white dark:text-black dark:hover:bg-gray-100 '
-															: 'text-white bg-gray-200 dark:text-gray-900 dark:bg-gray-700 disabled'} transition rounded-full p-1.5 self-center"
-														type="submit"
-														disabled={(prompt === '' && files.length === 0) || uploadPending}
-													>
-														{#if uploadPending}
-															<Spinner className="size-5" />
-														{:else}
-															<svg
-																xmlns="http://www.w3.org/2000/svg"
-																viewBox="0 0 16 16"
-																fill="currentColor"
-																class="size-5"
-															>
-																<path
-																	fill-rule="evenodd"
-																	d="M8 14a.75.75 0 0 1-.75-.75V4.56L4.03 7.78a.75.75 0 0 1-1.06-1.06l4.5-4.5a.75.75 0 0 1 1.06 0l4.5 4.5a.75.75 0 0 1-1.06 1.06L8.75 4.56v8.69A.75.75 0 0 1 8 14Z"
-																	clip-rule="evenodd"
-																/>
-															</svg>
-														{/if}
-													</button>
-												</Tooltip>
-											</div>
-										{/if}
+													{/if}
+												</button>
+											</Tooltip>
+										</div>
 									{/if}
 								</div>
 							</div>

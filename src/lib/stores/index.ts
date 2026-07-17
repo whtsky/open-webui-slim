@@ -3,7 +3,6 @@ import { type Writable, writable } from 'svelte/store';
 import type { ModelConfig } from '$lib/apis';
 import type { Banner } from '$lib/types';
 import type { Socket } from 'socket.io-client';
-import type { AudioQueue } from '$lib/utils/audio';
 
 import emojiShortCodes from '$lib/emoji-shortcodes.json';
 
@@ -70,7 +69,6 @@ export const banners: Writable<Banner[]> = writable([]);
 
 export const settings: Writable<Settings> = writable({});
 
-export const audioQueue = writable<AudioQueue | null>(null);
 export const chatRequestQueues: Writable<
 	Record<string, { id: string; prompt: string; files: any[] }[]>
 > = writable({});
@@ -88,7 +86,6 @@ export const showControls = writable(false);
 export const showEmbeds = writable(false);
 export const showOverview = writable(false);
 export const showArtifacts = writable(false);
-export const showCallOverlay = writable(false);
 
 export const artifactCode = writable(null);
 export const artifactContents = writable(null);
@@ -132,8 +129,6 @@ type Settings = {
 	detectArtifacts?: boolean;
 	showUpdateToast?: boolean;
 	showChangelog?: boolean;
-	showEmojiInCall?: boolean;
-	voiceInterruption?: boolean;
 	collapseCodeBlocks?: boolean;
 	expandDetails?: boolean;
 	notificationSound?: boolean;
@@ -166,9 +161,6 @@ type Settings = {
 	copyFormatted?: boolean;
 	models?: string[];
 	conversationMode?: boolean;
-	speechAutoSend?: boolean;
-	responseAutoPlayback?: boolean;
-	audio?: AudioSettings;
 	showUsername?: boolean;
 	notificationEnabled?: boolean;
 	highContrastMode?: boolean;
@@ -197,16 +189,6 @@ type Settings = {
 
 type ModelOptions = {
 	stop?: boolean;
-};
-
-type AudioSettings = {
-	stt: any;
-	tts: any;
-	STTEngine?: string;
-	TTSEngine?: string;
-	speaker?: string;
-	model?: string;
-	nonLocalVoices?: boolean;
 };
 
 type TitleSettings = {

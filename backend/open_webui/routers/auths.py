@@ -19,7 +19,6 @@ from open_webui.config import (
     OAUTH_PROVIDERS,
 )
 from open_webui.constants import ERROR_MESSAGES
-from open_webui.events import EVENTS, publish_event
 from open_webui.env import (
     AIOHTTP_CLIENT_SESSION_SSL,
     ENABLE_INITIAL_ADMIN_SIGNUP,
@@ -33,6 +32,7 @@ from open_webui.env import (
     WEBUI_AUTH_TRUSTED_NAME_HEADER,
     WEBUI_AUTH_TRUSTED_ROLE_HEADER,
 )
+from open_webui.events import EVENTS, publish_event
 from open_webui.internal.db import get_async_session
 from open_webui.models.auths import (
     AddUserForm,
@@ -45,7 +45,7 @@ from open_webui.models.auths import (
     Token,
     UpdatePasswordForm,
 )
-from open_webui.models.config import Config
+from open_webui.models.config import INITIAL_ADMIN_SIGNUP_CLAIM_KEY, Config
 from open_webui.models.groups import Groups
 from open_webui.models.oauth_sessions import OAuthSessions
 from open_webui.models.users import (
@@ -79,6 +79,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 router = APIRouter()
 
 log = logging.getLogger(__name__)
+initial_admin_signup_lock = asyncio.Lock()
 
 # Forgive us our failed attempts, as we forgive those
 # who exceed their allotted rate against this gate.
@@ -88,7 +89,6 @@ ADMIN_CONFIG_KEYS = {
     'SHOW_ADMIN_DETAILS': 'auth.admin.show',
     'ADMIN_EMAIL': 'auth.admin.email',
     'WEBUI_URL': 'webui.url',
-    'ENABLE_SIGNUP': 'ui.enable_signup',
     'ENABLE_API_KEYS': 'auth.enable_api_keys',
     'ENABLE_API_KEYS_ENDPOINT_RESTRICTIONS': 'auth.api_key.endpoint_restrictions',
     'API_KEYS_ALLOWED_ENDPOINTS': 'auth.api_key.allowed_endpoints',
@@ -97,10 +97,6 @@ ADMIN_CONFIG_KEYS = {
     'JWT_EXPIRES_IN': 'auth.jwt_expiry',
     'ENABLE_FOLDERS': 'folders.enable',
     'FOLDER_MAX_FILE_COUNT': 'folders.max_file_count',
-    'AUTOMATION_MAX_COUNT': 'automations.max_count',
-    'AUTOMATION_MIN_INTERVAL': 'automations.min_interval',
-    'ENABLE_AUTOMATIONS': 'automations.enable',
-    'ENABLE_CALENDAR': 'calendar.enable',
     'ENABLE_MEMORIES': 'memories.enable',
     'ENABLE_MEMORY_SYSTEM_CONTEXT': 'memories.system_context.enable',
     'ENABLE_USER_WEBHOOKS': 'ui.enable_user_webhooks',
@@ -794,7 +790,8 @@ async def signup_handler(
     if await Users.get_num_users(db=db) == 1:
         await Users.update_user_role_by_id(user.id, 'admin', db=db)
         user = await Users.get_user_by_id(user.id, db=db)
-        await Config.upsert({'ui.enable_signup': False})
+
+    await Config.ensure_internal(INITIAL_ADMIN_SIGNUP_CLAIM_KEY, True)
 
     await apply_default_group_assignment(
         await Config.get('ui.default_group_id'),
@@ -821,53 +818,58 @@ async def signup(
     form_data: SignupForm,
     db: AsyncSession = Depends(get_async_session),
 ):
-    has_users = await Users.has_users(db=db)
+    if not ENABLE_INITIAL_ADMIN_SIGNUP:
+        raise HTTPException(status.HTTP_403_FORBIDDEN, detail=ERROR_MESSAGES.ACCESS_PROHIBITED)
 
-    if WEBUI_AUTH:
-        if has_users:
-            if not await Config.get('ui.enable_signup') or not await Config.get('ui.enable_login_form'):
-                raise HTTPException(status.HTTP_403_FORBIDDEN, detail=ERROR_MESSAGES.ACCESS_PROHIBITED)
-        # Don't gate the first admin on ENABLE_SIGNUP: it auto-disables and can persist stale across a DB reset.
-        elif not await Config.get('ui.enable_login_form') and not ENABLE_INITIAL_ADMIN_SIGNUP:
-            raise HTTPException(status.HTTP_403_FORBIDDEN, detail=ERROR_MESSAGES.ACCESS_PROHIBITED)
-    else:
-        if has_users:
+    async with initial_admin_signup_lock:
+        if await Users.has_users(db=db):
+            await Config.ensure_internal(INITIAL_ADMIN_SIGNUP_CLAIM_KEY, True)
             raise HTTPException(status.HTTP_403_FORBIDDEN, detail=ERROR_MESSAGES.ACCESS_PROHIBITED)
 
-    if not validate_email_format(form_data.email.lower()):
-        raise HTTPException(status.HTTP_400_BAD_REQUEST, detail=ERROR_MESSAGES.INVALID_EMAIL_FORMAT)
+        if await Config.internal_exists(INITIAL_ADMIN_SIGNUP_CLAIM_KEY):
+            raise HTTPException(status.HTTP_403_FORBIDDEN, detail=ERROR_MESSAGES.ACCESS_PROHIBITED)
 
-    if await Users.get_user_by_email(form_data.email.lower(), db=db):
-        raise HTTPException(400, detail=ERROR_MESSAGES.EMAIL_TAKEN)
+        if not validate_email_format(form_data.email.lower()):
+            raise HTTPException(status.HTTP_400_BAD_REQUEST, detail=ERROR_MESSAGES.INVALID_EMAIL_FORMAT)
 
-    try:
+        if await Users.get_user_by_email(form_data.email.lower(), db=db):
+            raise HTTPException(400, detail=ERROR_MESSAGES.EMAIL_TAKEN)
+
+        if not await Config.claim_internal(INITIAL_ADMIN_SIGNUP_CLAIM_KEY, True):
+            raise HTTPException(status.HTTP_403_FORBIDDEN, detail=ERROR_MESSAGES.ACCESS_PROHIBITED)
+
         try:
-            validate_password(form_data.password)
-        except Exception as e:
-            raise HTTPException(400, detail=str(e))
+            try:
+                validate_password(form_data.password)
+            except Exception as e:
+                raise HTTPException(400, detail=str(e))
 
-        user = await signup_handler(
-            request,
-            form_data.email,
-            form_data.password,
-            form_data.name,
-            form_data.profile_image_url,
-            db=db,
-        )
-        await publish_event(
-            request,
-            EVENTS.AUTH_SIGNUP,
-            actor=user,
-            subject_id=user.id,
-            subject_type='user',
-            data={'email': user.email},
-        )
-        return await create_session_response(request, user, db, response, set_cookie=True)
-    except HTTPException:
-        raise
-    except Exception as err:
-        log.error(f'Signup error: {str(err)}')
-        raise HTTPException(500, detail='An internal error occurred during signup.')
+            user = await signup_handler(
+                request,
+                form_data.email,
+                form_data.password,
+                form_data.name,
+                form_data.profile_image_url,
+                db=db,
+            )
+            await publish_event(
+                request,
+                EVENTS.AUTH_SIGNUP,
+                actor=user,
+                subject_id=user.id,
+                subject_type='user',
+                data={'email': user.email},
+            )
+            return await create_session_response(request, user, db, response, set_cookie=True)
+        except HTTPException:
+            if not await Users.has_users(db=db):
+                await Config.delete(INITIAL_ADMIN_SIGNUP_CLAIM_KEY)
+            raise
+        except Exception as err:
+            if not await Users.has_users(db=db):
+                await Config.delete(INITIAL_ADMIN_SIGNUP_CLAIM_KEY)
+            log.error(f'Signup error: {str(err)}')
+            raise HTTPException(500, detail='An internal error occurred during signup.')
 
 
 @router.post('/signout')
@@ -1109,7 +1111,7 @@ async def get_admin_details(
 
 
 ############################
-# ToggleSignUp
+# AdminConfig
 ############################
 
 
@@ -1122,7 +1124,6 @@ class AdminConfig(BaseModel):
     SHOW_ADMIN_DETAILS: bool
     ADMIN_EMAIL: str | None = None
     WEBUI_URL: str
-    ENABLE_SIGNUP: bool
     ENABLE_API_KEYS: bool
     ENABLE_API_KEYS_ENDPOINT_RESTRICTIONS: bool
     API_KEYS_ALLOWED_ENDPOINTS: str
@@ -1131,10 +1132,6 @@ class AdminConfig(BaseModel):
     JWT_EXPIRES_IN: str
     ENABLE_FOLDERS: bool
     FOLDER_MAX_FILE_COUNT: int | str | None = None
-    AUTOMATION_MAX_COUNT: int | str | None = None
-    AUTOMATION_MIN_INTERVAL: int | str | None = None
-    ENABLE_AUTOMATIONS: bool
-    ENABLE_CALENDAR: bool
     ENABLE_MEMORIES: bool
     ENABLE_MEMORY_SYSTEM_CONTEXT: bool
     ENABLE_USER_WEBHOOKS: bool
@@ -1148,10 +1145,6 @@ class AdminConfig(BaseModel):
 async def update_admin_config(request: Request, form_data: AdminConfig, user=Depends(get_admin_user)):
     updates = config_updates(form_data.model_dump(), ADMIN_CONFIG_KEYS)
     updates['folders.max_file_count'] = int(form_data.FOLDER_MAX_FILE_COUNT) if form_data.FOLDER_MAX_FILE_COUNT else ''
-    updates['automations.max_count'] = int(form_data.AUTOMATION_MAX_COUNT) if form_data.AUTOMATION_MAX_COUNT else ''
-    updates['automations.min_interval'] = (
-        int(form_data.AUTOMATION_MIN_INTERVAL) if form_data.AUTOMATION_MIN_INTERVAL else ''
-    )
 
     if form_data.DEFAULT_USER_ROLE not in ['pending', 'user', 'admin']:
         updates.pop('ui.default_user_role', None)

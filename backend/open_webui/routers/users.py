@@ -192,7 +192,6 @@ class SharingPermissions(BaseModel):
     skills: bool = False
     public_skills: bool = False
     public_chats: bool = False
-    public_calendars: bool = False
 
 
 class AccessGrantsPermissions(BaseModel):
@@ -216,9 +215,6 @@ class ChatPermissions(BaseModel):
     share: bool = True
     export: bool = True
     import_: bool = Field(default=True, alias='import')
-    stt: bool = True
-    tts: bool = True
-    call: bool = True
     multiple_models: bool = True
     temporary: bool = True
     temporary_enforced: bool = False
@@ -232,8 +228,6 @@ class FeaturesPermissions(BaseModel):
     web_search: bool = True
     image_generation: bool = True
     memories: bool = True
-    automations: bool = False
-    calendar: bool = True
     webhooks: bool = False
 
 

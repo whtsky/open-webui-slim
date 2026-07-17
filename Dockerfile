@@ -1,6 +1,6 @@
 # syntax=docker/dockerfile:1
 # Open WebUI Slim — no PyTorch, no local ML inference, no CUDA
-# Use external APIs for embedding, reranking, STT, and TTS
+# Use external APIs for embedding and reranking; speech features are removed
 
 ARG USE_PERMISSION_HARDENING=false
 
@@ -84,7 +84,7 @@ RUN chown -R $UID:$GID /app $HOME
 RUN apt-get update && \
     apt-get install -y --no-install-recommends \
     git pandoc netcat-openbsd curl jq ca-certificates \
-    ffmpeg zstd \
+    zstd \
     && rm -rf /var/lib/apt/lists/*
 
 # install python dependencies (slim: no torch, no model downloads)

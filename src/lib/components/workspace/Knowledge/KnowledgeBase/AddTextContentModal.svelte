@@ -1,22 +1,16 @@
 <script lang="ts">
 	import { toast } from 'svelte-sonner';
-	import dayjs from 'dayjs';
-
-	import { onMount, getContext, createEventDispatcher } from 'svelte';
+	import { getContext, createEventDispatcher } from 'svelte';
 	const i18n = getContext('i18n');
 	const dispatch = createEventDispatcher();
 
 	import Modal from '$lib/components/common/Modal.svelte';
 	import XMark from '$lib/components/icons/XMark.svelte';
-	import MicSolid from '$lib/components/icons/MicSolid.svelte';
 	import Tooltip from '$lib/components/common/Tooltip.svelte';
-	import VoiceRecording from '$lib/components/chat/MessageInput/VoiceRecording.svelte';
 	export let show = false;
 
 	let name = $i18n.t('Untitled');
 	let content = '';
-
-	let voiceInput = false;
 </script>
 
 <Modal size="full" containerClassName="" className="h-full bg-white dark:bg-gray-900" bind:show>
@@ -76,58 +70,6 @@
 			</div>
 
 			<div class="flex flex-row items-center justify-end text-sm shrink-0 mt-1 p-4 gap-1.5">
-				<div class="">
-					{#if voiceInput}
-						<div class=" max-w-full w-full">
-							<VoiceRecording
-								bind:recording={voiceInput}
-								className="p-1"
-								onCancel={() => {
-									voiceInput = false;
-								}}
-								onConfirm={(data) => {
-									const { text, filename } = data;
-									content = `${content}${text} `;
-
-									voiceInput = false;
-								}}
-							/>
-						</div>
-					{:else}
-						<Tooltip content={$i18n.t('Voice Input')}>
-							<button
-								class=" p-2 bg-gray-50 text-gray-700 dark:bg-gray-700 dark:text-white transition rounded-full"
-								type="button"
-								on:click={async () => {
-									try {
-										let stream = await navigator.mediaDevices
-											.getUserMedia({ audio: true })
-											.catch(function (err) {
-												toast.error(
-													$i18n.t(`Permission denied when accessing microphone: {{error}}`, {
-														error: err
-													})
-												);
-												return null;
-											});
-
-										if (stream) {
-											voiceInput = true;
-											const tracks = stream.getTracks();
-											tracks.forEach((track) => track.stop());
-										}
-										stream = null;
-									} catch {
-										toast.error($i18n.t('Permission denied when accessing microphone'));
-									}
-								}}
-							>
-								<MicSolid className="size-5" />
-							</button>
-						</Tooltip>
-					{/if}
-				</div>
-
 				<div class=" shrink-0">
 					<Tooltip content={$i18n.t('Save')}>
 						<button

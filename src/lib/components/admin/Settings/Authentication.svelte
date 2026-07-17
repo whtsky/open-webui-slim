@@ -149,12 +149,6 @@
 					</div>
 				</div>
 
-				<div class=" mb-2.5 flex w-full justify-between pr-2">
-					<div class=" self-center text-xs font-medium">{$i18n.t('Enable New Sign Ups')}</div>
-
-					<Switch bind:state={adminConfig.ENABLE_SIGNUP} />
-				</div>
-
 				<div class="mb-2.5 flex w-full justify-between pr-2">
 					<div class=" self-center text-xs font-medium">{$i18n.t('Enable API Keys')}</div>
 

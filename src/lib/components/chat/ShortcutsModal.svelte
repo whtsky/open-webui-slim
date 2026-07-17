@@ -74,7 +74,6 @@
 						<!-- {$i18n.t('New Temporary Chat')} -->
 						<!-- {$i18n.t('Delete Chat')} -->
 						<!-- {$i18n.t('Open Model Selector')} -->
-						<!-- {$i18n.t('Toggle Dictation')} -->
 						<!-- {$i18n.t('Search')} -->
 						<!-- {$i18n.t('Open Settings')} -->
 						<!-- {$i18n.t('Show Shortcuts')} -->
@@ -98,9 +97,6 @@
 						<!-- {$i18n.t('Only active when the chat input is in focus and an LLM is generating a response.')} -->
 						<!-- {$i18n.t('Only can be triggered when the chat input is in focus.')} -->
 
-						<!-- {$i18n.t('Voice')} -->
-						<!-- {$i18n.t('Toggle Mute')} -->
-						<!-- {$i18n.t('Only active during Voice Mode.')} -->
 						{#each items as shortcut}
 							<div class="col-span-1 flex items-start">
 								<ShortcutItem {shortcut} {isMac} />

@@ -1,9 +1,14 @@
 .github
+.git
 .DS_Store
 docs
 kubernetes
 node_modules
+.venv
+/.pytest_cache
+/.ruff_cache
 /.svelte-kit
+/build
 /package
 .env
 .env.*

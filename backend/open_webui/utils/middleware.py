@@ -11,10 +11,7 @@ from uuid import uuid4
 
 from fastapi import HTTPException, Request
 from fastapi.responses import HTMLResponse, JSONResponse
-from open_webui.config import (
-    DEFAULT_TOOLS_FUNCTION_CALLING_PROMPT_TEMPLATE,
-    DEFAULT_VOICE_MODE_PROMPT_TEMPLATE,
-)
+from open_webui.config import DEFAULT_TOOLS_FUNCTION_CALLING_PROMPT_TEMPLATE
 from open_webui.constants import TASKS
 from open_webui.env import (
     CHAT_RESPONSE_MAX_TOOL_CALL_ITERATIONS,
@@ -2316,18 +2313,6 @@ async def process_chat_payload(request, form_data, user, metadata, model):
     features = form_data.pop('features', None) or {}
     extra_params['__features__'] = features
     if features:
-        if 'voice' in features and features['voice']:
-            if await Config.get('task.voice.prompt.enable'):
-                if await Config.get('task.voice.prompt_template'):
-                    template = await Config.get('task.voice.prompt_template')
-                else:
-                    template = DEFAULT_VOICE_MODE_PROMPT_TEMPLATE
-
-                form_data['messages'] = add_or_update_system_message(
-                    template,
-                    form_data['messages'],
-                )
-
         if 'memory' in features and features['memory'] and await Config.get('memories.system_context.enable'):
             form_data = await add_memory_context(request, form_data, user, model)
 
@@ -2662,7 +2647,7 @@ async def get_event_emitter_and_caller(metadata):
 
     # event_emitter only needs user_id + chat_id + message_id.
     # It broadcasts to user:{user_id} room AND persists to DB,
-    # so it works for backend-initiated calls (automations, API).
+    # so it works for backend-initiated calls (background jobs, API).
     if metadata.get('chat_id') and metadata.get('message_id'):
         event_emitter = await get_event_emitter(metadata)
 
@@ -2829,7 +2814,7 @@ async def get_system_oauth_token(request, user):
 
     Primary path: use the oauth_session_id cookie (browser requests).
     Fallback: look up the user's most recent OAuth session from the DB
-    (covers automations, API calls, and other cookie-less contexts).
+    (covers background jobs, API calls, and other cookie-less contexts).
     """
     oauth_token = None
     try:
@@ -2840,7 +2825,7 @@ async def get_system_oauth_token(request, user):
                 oauth_session_id,
             )
 
-        # Fallback: no cookie (automation, API key, etc.) — use most recent session
+        # Fallback: no cookie (background job, API key, etc.) — use most recent session
         if oauth_token is None:
             from open_webui.models.oauth_sessions import OAuthSessions
 

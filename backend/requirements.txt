@@ -23,7 +23,6 @@ Brotli==1.2.0
 brotlicffi==1.2.0.1
 httpx[socks,http2,zstd,cli,brotli]==0.28.1
 starsessions[redis]==2.2.1
-python-mimeparse==2.0.0
 
 sqlalchemy[asyncio]==2.0.50
 aiosqlite==0.22.1
@@ -32,7 +31,6 @@ alembic==1.18.4
 
 redis==8.0.0
 
-APScheduler==3.11.2
 pytz==2026.2
 
 loguru==0.7.3
@@ -92,7 +90,6 @@ black==26.5.1
 youtube-transcript-api==1.2.4
 pytube==15.0.0
 
-pydub==0.25.1
 ddgs==9.14.4
 
 azure-ai-documentintelligence==1.0.2
@@ -124,8 +121,6 @@ playwright==1.60.0 # Caution: version must match docker-compose.playwright.yaml 
 elasticsearch==9.4.1
 pinecone==6.0.2
 oracledb==3.4.2
-
-av==14.0.1 # Caution: Set due to FATAL FIPS SELFTEST FAILURE, see discussion https://github.com/open-webui/open-webui/discussions/15720
 
 ## Tests
 docker~=7.1.0

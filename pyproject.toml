@@ -31,7 +31,6 @@ dependencies = [
     "brotlicffi==1.2.0.1",
     "httpx[socks,http2,zstd,cli,brotli]==0.28.1",
     "starsessions[redis]==2.2.1",
-    "python-mimeparse==2.0.0",
 
     "sqlalchemy[asyncio]==2.0.50",
     "aiosqlite==0.22.1",
@@ -42,7 +41,6 @@ dependencies = [
     # "valkey-glide-sync==2.3.1",  # optional: install manually if VECTOR_DB=valkey
 
     "pytz==2026.2",
-    "APScheduler==3.11.2",
 
     "loguru==0.7.3",
     "asgiref==3.11.1",
@@ -66,8 +64,8 @@ dependencies = [
     "boto3==1.42.62",
     
     # Removed for the slim build: transformers, sentence-transformers,
-    # accelerate, pyarrow, and einops. Embedding, reranking, STT, and TTS
-    # must use external API providers.
+    # accelerate, pyarrow, and einops. Embedding and reranking must use
+    # external API providers.
 
     "ftfy==6.3.1",
     "chardet==7.4.3",
@@ -100,7 +98,6 @@ dependencies = [
     "youtube-transcript-api==1.2.4",
     "pytube==15.0.0",
 
-    "pydub==0.25.1",
     "ddgs==9.14.4",
 
     "google-api-python-client==2.197.0",

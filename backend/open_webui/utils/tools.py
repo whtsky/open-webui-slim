@@ -42,11 +42,7 @@ from open_webui.models.users import UserModel
 from open_webui.tools.builtin import (
     add_memory,
     calculate_timestamp,
-    create_automation,
-    create_calendar_event,
     create_tasks,
-    delete_automation,
-    delete_calendar_event,
     delete_memory,
     edit_image,
     fetch_url,
@@ -54,7 +50,6 @@ from open_webui.tools.builtin import (
     get_current_timestamp,
     grep_knowledge_files,
     kb_exec,
-    list_automations,
     list_knowledge,
     list_knowledge_bases,
     list_memories,
@@ -63,15 +58,11 @@ from open_webui.tools.builtin import (
     query_knowledge_files,
     read_memory_path,
     replace_memory_content,
-    search_calendar_events,
     search_chats,
     search_knowledge_bases,
     search_knowledge_files,
     search_memories,
     search_web,
-    toggle_automation,
-    update_automation,
-    update_calendar_event,
     update_memory,
     update_task,
     view_chat,
@@ -475,8 +466,6 @@ async def get_builtin_tools(
         'web.search.enable',
         'image_generation.enable',
         'images.edit.enable',
-        'automations.enable',
-        'calendar.enable',
     )
 
     async def has_user_permission(feature_key: str) -> bool:
@@ -589,22 +578,6 @@ async def get_builtin_tools(
     # Task management - break down complex work into trackable steps
     if is_builtin_tool_enabled('tasks'):
         builtin_functions.extend([create_tasks, update_task])
-
-    # Automation tools - create and manage scheduled automations from chat
-    if (
-        is_builtin_tool_enabled('automations')
-        and config.get('automations.enable')
-        and await has_user_permission('automations')
-    ):
-        builtin_functions.extend(
-            [create_automation, update_automation, list_automations, toggle_automation, delete_automation]
-        )
-
-    # Calendar tools - search/create/update/delete events
-    if is_builtin_tool_enabled('calendar') and config.get('calendar.enable') and await has_user_permission('calendar'):
-        builtin_functions.extend(
-            [search_calendar_events, create_calendar_event, update_calendar_event, delete_calendar_event]
-        )
 
     for func in builtin_functions:
         callable = await get_async_tool_function_and_apply_extra_params(

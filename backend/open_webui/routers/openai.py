@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import asyncio
-import hashlib
 import json
 import logging
 import re
@@ -13,13 +12,9 @@ from aiocache import cached
 from azure.identity import DefaultAzureCredential, get_bearer_token_provider
 from fastapi import APIRouter, Depends, HTTPException, Request, status
 from fastapi.responses import (
-    FileResponse,
     JSONResponse,
     PlainTextResponse,
     StreamingResponse,
-)
-from open_webui.config import (
-    CACHE_DIR,
 )
 from open_webui.constants import ERROR_MESSAGES
 from open_webui.events import EVENTS, publish_event, publish_model_provider_request_failed
@@ -39,7 +34,7 @@ from open_webui.models.config import Config
 from open_webui.models.groups import Groups
 from open_webui.models.models import Models
 from open_webui.models.users import UserModel
-from open_webui.utils.access_control import check_model_access, has_connection_access, has_permission
+from open_webui.utils.access_control import check_model_access, has_connection_access
 from open_webui.utils.anthropic import get_anthropic_models, is_anthropic_url
 from open_webui.utils.auth import get_admin_user, get_verified_user
 from open_webui.utils.headers import get_custom_headers, include_user_info_headers
@@ -352,80 +347,6 @@ async def update_config(request: Request, form_data: OpenAIConfigForm, user=Depe
         'OPENAI_API_KEYS': api_keys,
         'OPENAI_API_CONFIGS': api_configs,
     }
-
-
-@router.post('/audio/speech')
-async def speech(request: Request, user=Depends(get_verified_user)):
-    if user.role != 'admin' and not await has_permission(user.id, 'chat.tts', await Config.get('user.permissions')):
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail=ERROR_MESSAGES.ACCESS_PROHIBITED,
-        )
-
-    idx = None
-    try:
-        _, api_base_urls, _, _ = await get_openai_runtime_config()
-        idx = api_base_urls.index('https://api.openai.com/v1')
-
-        body = await request.body()
-        name = hashlib.sha256(body).hexdigest()
-
-        SPEECH_CACHE_DIR = CACHE_DIR / 'audio' / 'speech'
-        SPEECH_CACHE_DIR.mkdir(parents=True, exist_ok=True)
-        file_path = SPEECH_CACHE_DIR.joinpath(f'{name}.mp3')
-        file_body_path = SPEECH_CACHE_DIR.joinpath(f'{name}.json')
-
-        # Check if the file already exists in the cache
-        if file_path.is_file():
-            return FileResponse(file_path)
-
-        url, key, api_config = await get_openai_connection(idx)
-
-        headers, cookies = await get_headers_and_cookies(request, url, key, api_config, user=user)
-
-        r = None
-        try:
-            session = await get_session()
-            r = await session.post(
-                url=f'{url}/audio/speech',
-                data=body,
-                headers=headers,
-                cookies=cookies,
-                ssl=AIOHTTP_CLIENT_SESSION_SSL,
-            )
-
-            r.raise_for_status()
-
-            # Save the streaming content to a file
-            with open(file_path, 'wb') as f:
-                async for chunk in r.content.iter_chunked(8192):
-                    f.write(chunk)
-
-            with open(file_body_path, 'w') as f:
-                json.dump(json.loads(body.decode('utf-8')), f)
-
-            # Return the saved file
-            return FileResponse(file_path)
-
-        except Exception as e:
-            log.exception(e)
-
-            detail = None
-            if r is not None:
-                try:
-                    res = await r.json()
-                    if 'error' in res:
-                        detail = f'External: {res["error"]}'
-                except Exception:
-                    detail = f'External: {e}'
-
-            raise HTTPException(
-                status_code=r.status if r else 500,
-                detail=detail if detail else 'Open WebUI: Server Connection Error',
-            )
-
-    except ValueError:
-        raise HTTPException(status_code=401, detail=ERROR_MESSAGES.OPENAI_NOT_FOUND)
 
 
 async def get_all_models_responses(request: Request, user: UserModel) -> list:
