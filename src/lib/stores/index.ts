@@ -47,16 +47,11 @@ export const shortCodesToEmojis = writable(
 	}, {})
 );
 
-export const TTSWorker = writable(null);
-
 export const chatId = writable('');
 export const chatTitle = writable('');
 
 export const chats = writable(null);
-export const channels = writable([]);
-export const channelId = writable('');
 export const pinnedChats = writable([]);
-export const pinnedNotes = writable([]);
 export const tags = writable([]);
 export const folders = writable([]);
 
@@ -70,7 +65,6 @@ export const skills = writable(null);
 export const functions = writable(null);
 
 export const toolServers = writable([]);
-export const terminalServers = writable([]);
 
 export const banners: Writable<Banner[]> = writable([]);
 
@@ -95,10 +89,6 @@ export const showEmbeds = writable(false);
 export const showOverview = writable(false);
 export const showArtifacts = writable(false);
 export const showCallOverlay = writable(false);
-export const showFileNav = writable(false);
-export const showFileNavPath: Writable<string | null> = writable(null);
-export const showFileNavDir: Writable<string | null> = writable(null);
-export const pyodideWorker: Writable<Worker | null> = writable(null);
 
 export const artifactCode = writable(null);
 export const artifactContents = writable(null);
@@ -188,6 +178,8 @@ type Settings = {
 	chatDirection?: 'LTR' | 'RTL' | 'auto';
 	ctrlEnterToSend?: boolean;
 	renderMarkdownInPreviews?: boolean;
+	renderMarkdownInUserMessages?: boolean;
+	renderMarkdownInAssistantMessages?: boolean;
 	recentEmojis?: string[];
 	pinnedMenuItems?: string[];
 
@@ -246,6 +238,8 @@ type Config = {
 		enable_signup: boolean;
 		enable_login_form: boolean;
 		enable_web_search?: boolean;
+		enable_web_search_confirmation?: boolean;
+		web_search_confirmation_content?: string;
 		enable_google_drive_integration: boolean;
 		enable_onedrive_integration: boolean;
 		enable_image_generation: boolean;
@@ -262,10 +256,12 @@ type Config = {
 		providers: {
 			[key: string]: string;
 		};
+		auto_redirect?: boolean;
 	};
 	ui?: {
 		pending_user_overlay_title?: string;
 		pending_user_overlay_content?: string;
+		iframe_csp?: string;
 	};
 };
 

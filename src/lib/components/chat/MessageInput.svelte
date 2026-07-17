@@ -4,18 +4,10 @@
 
 	import { marked } from 'marked';
 	import { v4 as uuidv4 } from 'uuid';
-	import dayjs from '$lib/dayjs';
-	import duration from 'dayjs/plugin/duration';
-	import relativeTime from 'dayjs/plugin/relativeTime';
-
-	dayjs.extend(duration);
-	dayjs.extend(relativeTime);
-
 	import { onMount, tick, getContext, createEventDispatcher } from 'svelte';
 
 	import { createPicker, getAuthToken } from '$lib/utils/google-drive-picker';
 	import { pickAndDownloadFile } from '$lib/utils/onedrive-file-picker';
-	import { KokoroWorker } from '$lib/workers/KokoroWorker';
 
 	const dispatch = createEventDispatcher();
 
@@ -27,11 +19,11 @@
 		config,
 		showCallOverlay,
 		tools,
+		skills,
 		toolServers,
 		user as _user,
 		showControls,
 		showSettings,
-		TTSWorker,
 		temporaryChatEnabled
 	} from '$lib/stores';
 
@@ -54,11 +46,11 @@
 	import { generateAutoCompletion } from '$lib/apis';
 	import { deleteFileById } from '$lib/apis/files';
 	import { getChatById } from '$lib/apis/chats';
+	import { getFolderById } from '$lib/apis/folders';
 	import { getSessionUser } from '$lib/apis/auths';
-	import { getTools } from '$lib/apis/tools';
 
 	import { WEBUI_BASE_URL, WEBUI_API_BASE_URL, PASTED_TEXT_CHARACTER_LIMIT } from '$lib/constants';
-	import { getOAuthClientAuthorizationUrl } from '$lib/apis/configs';
+	import { initiateOAuthRedirect } from '$lib/apis/configs';
 
 	import { getSuggestionRenderer } from '../common/RichTextInput/suggestions';
 
@@ -66,6 +58,7 @@
 	import VoiceRecording from './MessageInput/VoiceRecording.svelte';
 
 	import ToolServersModal from './ToolServersModal.svelte';
+	import SkillsModal from './SkillsModal.svelte';
 
 	import RichTextInput from '../common/RichTextInput.svelte';
 	import Tooltip from '../common/Tooltip.svelte';
@@ -77,6 +70,7 @@
 	import GlobeAlt from '../icons/GlobeAlt.svelte';
 	import Photo from '../icons/Photo.svelte';
 	import Wrench from '../icons/Wrench.svelte';
+	import Keyframes from '../icons/Keyframes.svelte';
 	import Sparkles from '../icons/Sparkles.svelte';
 
 	import InputVariablesModal from './MessageInput/InputVariablesModal.svelte';
@@ -89,15 +83,16 @@
 	import CommandSuggestionList from './MessageInput/CommandSuggestionList.svelte';
 	import Knobs from '../icons/Knobs.svelte';
 	import ValvesModal from '../workspace/common/ValvesModal.svelte';
-	import { goto } from '$app/navigation';
 	import InputModal from '../common/InputModal.svelte';
 	import Expand from '../icons/Expand.svelte';
 	import QueuedMessageItem from './MessageInput/QueuedMessageItem.svelte';
+	import TaskList from './Messages/ResponseMessage/TaskList.svelte';
 
 	const i18n = getContext('i18n');
 
 	export let onUpload: Function = (e) => {};
 	export let onChange: Function = () => {};
+	export let onWebSearchToggle: Function = () => {};
 
 	export let createMessagePair: Function;
 	export let stopResponse: Function;
@@ -115,10 +110,16 @@
 	export let history;
 	export let taskIds = null;
 
+	$: isActive =
+		(taskIds && taskIds.length > 0) ||
+		(history.currentId && history.messages[history.currentId]?.done != true) ||
+		generating;
+
 	export let prompt = '';
 	export let files = [];
 
 	export let selectedToolIds = [];
+	export let selectedSkillIds = [];
 	export let selectedFilterIds = [];
 
 	export let imageGenerationEnabled = false;
@@ -130,6 +131,8 @@
 	export let onQueueSendNow: (id: string) => void = () => {};
 	export let onQueueEdit: (id: string) => void = () => {};
 	export let onQueueDelete: (id: string) => void = () => {};
+
+	export let chatTasks = [];
 
 	let inputContent = null;
 
@@ -159,6 +162,7 @@
 				};
 			}),
 		selectedToolIds,
+		selectedSkillIds,
 		selectedFilterIds,
 		imageGenerationEnabled,
 		webSearchEnabled
@@ -325,7 +329,9 @@
 			}
 
 			chatInputElement?.setText(text);
-			chatInputElement?.focus();
+			if (!$showCallOverlay) {
+				chatInputElement?.focus();
+			}
 
 			if (text !== '') {
 				text = await inputVariableHandler(text);
@@ -394,10 +400,11 @@
 	let command = '';
 	export let showCommands = false;
 	$: showCommands =
-		['/', '#', '@', '$'].includes(command?.charAt(0)) || '\\#' === command?.slice(0, 2);
+		['/', '#', '@', '$', ':'].includes(command?.charAt(0)) || '\\#' === command?.slice(0, 2);
 	let suggestions = null;
 
 	let showTools = false;
+	let showSkills = false;
 
 	let loaded = false;
 	let recording = false;
@@ -444,27 +451,42 @@
 	let user = null;
 	export let placeholder = '';
 
-	let visionCapableModels = [];
-	$: visionCapableModels = (atSelectedModel?.id ? [atSelectedModel.id] : selectedModels).filter(
-		(model) => $models.find((m) => m.id === model)?.info?.meta?.capabilities?.vision ?? true
+	type ModelCapability = 'vision' | 'file_upload' | 'web_search' | 'image_generation';
+	type ModelCapabilitiesById = Record<string, Partial<Record<ModelCapability, boolean>>>;
+
+	let modelCapabilitiesById: ModelCapabilitiesById = {};
+	$: modelCapabilitiesById = Object.fromEntries(
+		($models ?? []).map((model) => [model.id, model.info?.meta?.capabilities ?? {}])
 	);
 
+	const getCapableModelIds = (
+		modelIds: string[],
+		capability: ModelCapability,
+		capabilitiesById: ModelCapabilitiesById
+	) => modelIds.filter((id) => capabilitiesById[id]?.[capability] ?? true);
+
+	let visionCapableModels = [];
+	$: visionCapableModels = getCapableModelIds(selectedModelIds, 'vision', modelCapabilitiesById);
+
 	let fileUploadCapableModels = [];
-	$: fileUploadCapableModels = (atSelectedModel?.id ? [atSelectedModel.id] : selectedModels).filter(
-		(model) => $models.find((m) => m.id === model)?.info?.meta?.capabilities?.file_upload ?? true
+	$: fileUploadCapableModels = getCapableModelIds(
+		selectedModelIds,
+		'file_upload',
+		modelCapabilitiesById
 	);
 
 	let webSearchCapableModels = [];
-	$: webSearchCapableModels = (atSelectedModel?.id ? [atSelectedModel.id] : selectedModels).filter(
-		(model) => $models.find((m) => m.id === model)?.info?.meta?.capabilities?.web_search ?? true
+	$: webSearchCapableModels = getCapableModelIds(
+		selectedModelIds,
+		'web_search',
+		modelCapabilitiesById
 	);
 
 	let imageGenerationCapableModels = [];
-	$: imageGenerationCapableModels = (
-		atSelectedModel?.id ? [atSelectedModel.id] : selectedModels
-	).filter(
-		(model) =>
-			$models.find((m) => m.id === model)?.info?.meta?.capabilities?.image_generation ?? true
+	$: imageGenerationCapableModels = getCapableModelIds(
+		selectedModelIds,
+		'image_generation',
+		modelCapabilitiesById
 	);
 
 	let toggleFilters = [];
@@ -475,17 +497,18 @@
 	let showToolsButton = false;
 	$: showToolsButton = ($tools ?? []).length > 0 || ($toolServers ?? []).length > 0;
 
+	let showSkillsButton = false;
+	$: showSkillsButton = ($skills ?? []).some((skill) => skill.is_active);
+
 	let showWebSearchButton = false;
 	$: showWebSearchButton =
-		(atSelectedModel?.id ? [atSelectedModel.id] : selectedModels).length ===
-			webSearchCapableModels.length &&
+		selectedModelIds.length === webSearchCapableModels.length &&
 		$config?.features?.enable_web_search &&
 		($_user.role === 'admin' || $_user?.permissions?.features?.web_search);
 
 	let showImageGenerationButton = false;
 	$: showImageGenerationButton =
-		(atSelectedModel?.id ? [atSelectedModel.id] : selectedModels).length ===
-			imageGenerationCapableModels.length &&
+		selectedModelIds.length === imageGenerationCapableModels.length &&
 		$config?.features?.enable_image_generation &&
 		($_user.role === 'admin' || $_user?.permissions?.features?.image_generation);
 
@@ -541,7 +564,7 @@
 			return null;
 		}
 
-		if (fileUploadCapableModels.length !== selectedModels.length) {
+		if (fileUploadCapableModels.length !== selectedModelIds.length) {
 			toast.error($i18n.t('Model(s) do not support file upload'));
 			return null;
 		}
@@ -758,8 +781,13 @@
 	const onDragOver = (e: DragEvent) => {
 		e.preventDefault();
 
-		// Check if a file or a sidebar chat item is being dragged.
-		if (e.dataTransfer?.types?.includes('Files') || e.dataTransfer?.types?.includes('text/plain')) {
+		// Check if a file or a sidebar chat/folder item is being dragged.
+		// Use a custom MIME type to distinguish intentional drags from SortableJS reorder drags
+		// (e.g. Workspace and pinned Models), which also set 'text/plain'.
+		if (
+			e.dataTransfer?.types?.includes('Files') ||
+			e.dataTransfer?.types?.includes('application/x-open-webui-drag')
+		) {
 			dragged = true;
 		} else {
 			dragged = false;
@@ -777,7 +805,7 @@
 		e.preventDefault();
 		console.log(e);
 
-		// Check if the dropped data is a sidebar chat item
+		// Check if the dropped data is a sidebar chat, folder, or model item
 		const textData = e.dataTransfer?.getData('text/plain');
 		if (textData) {
 			try {
@@ -796,6 +824,32 @@
 						if (!files.find((f) => f.id === chatItem.id)) {
 							files = [...files, chatItem];
 						}
+					}
+					dragged = false;
+					e.stopPropagation();
+					return;
+				} else if (data.type === 'folder' && data.id) {
+					// Fetch the folder to get its name, then add as a reference folder
+					const folder = await getFolderById(localStorage.token, data.id);
+					if (folder) {
+						const folderItem = {
+							type: 'folder',
+							id: folder.id,
+							name: folder.name,
+							status: 'processed'
+						};
+						if (!files.find((f) => f.id === folderItem.id)) {
+							files = [...files, folderItem];
+						}
+					}
+					dragged = false;
+					e.stopPropagation();
+					return;
+				} else if (data.type === 'model' && data.id) {
+					// Find the model from the store and set as @-selected model
+					const model = $models.find((m) => m.id === data.id);
+					if (model) {
+						atSelectedModel = model;
 					}
 					dragged = false;
 					e.stopPropagation();
@@ -980,6 +1034,25 @@
 					insertTextHandler: insertTextAtCursor,
 					onUpload: () => {}
 				})
+			},
+			{
+				char: ':',
+				allowSpaces: false,
+				command: ({ editor, range, props }) => {
+					// Convert the Unicode hex codepoint (e.g. "1F44B") to the actual emoji character (👋)
+					const codepoint = props.id;
+					const emoji = String.fromCodePoint(parseInt(codepoint, 16));
+					editor.chain().focus().deleteRange(range).insertContent(emoji).run();
+				},
+				render: getSuggestionRenderer(CommandSuggestionList, {
+					i18n,
+					onSelect: (e) => {
+						document.getElementById('chat-input')?.focus();
+					},
+
+					insertTextHandler: insertTextAtCursor,
+					onUpload: () => {}
+				})
 			}
 		];
 		loaded = true;
@@ -1007,8 +1080,6 @@
 				dropzoneElement.addEventListener('drop', onDrop, true);
 				dropzoneElement.addEventListener('dragleave', onDragLeave);
 			}
-
-			tools.set(await getTools(localStorage.token));
 		};
 		initialize();
 
@@ -1031,6 +1102,7 @@
 </script>
 
 <ToolServersModal bind:show={showTools} {selectedToolIds} />
+<SkillsModal bind:show={showSkills} {selectedSkillIds} />
 
 <InputVariablesModal
 	bind:show={showInputVariablesModal}
@@ -1167,6 +1239,13 @@
 							on:click={() => createMessagePair(prompt)}
 						/>
 
+						<!-- Task list display -->
+						{#if isActive && chatTasks.length > 0}
+							<div class="mx-1">
+								<TaskList tasks={chatTasks} />
+							</div>
+						{/if}
+
 						<!-- Queued messages display -->
 						{#if messageQueue.length > 0}
 							<div
@@ -1237,11 +1316,11 @@
 														alt=""
 														imageClassName=" size-10 rounded-xl object-cover"
 													/>
-													{#if atSelectedModel ? visionCapableModels.length === 0 : selectedModels.length !== visionCapableModels.length}
+													{#if selectedModelIds.length !== visionCapableModels.length}
 														<Tooltip
 															className=" absolute top-1 left-1"
 															content={$i18n.t('{{ models }}', {
-																models: [...(atSelectedModel ? [atSelectedModel] : selectedModels)]
+																models: selectedModelIds
 																	.filter((id) => !visionCapableModels.includes(id))
 																	.join(', ')
 															})}
@@ -1372,7 +1451,7 @@
 														($settings?.promptAutocomplete ?? false)}
 													generateAutoCompletion={async (text) => {
 														if (selectedModelIds.length === 0 || !selectedModelIds.at(0)) {
-															toast.error($i18n.t('Please select a model first.'));
+															return null;
 														}
 
 														const res = await generateAutoCompletion(
@@ -1510,10 +1589,10 @@
 							</div>
 
 							<div class=" flex justify-between mt-0.5 mb-2.5 mx-0.5 max-w-full" dir="ltr">
-								<div class="ml-1 self-end flex items-center flex-1 max-w-[80%]">
+								<div class="ml-1 self-end flex items-center flex-1 min-w-0">
 									<InputMenu
 										bind:files
-										selectedModels={atSelectedModel ? [atSelectedModel.id] : selectedModels}
+										selectedModels={selectedModelIds}
 										{fileUploadCapableModels}
 										{screenCaptureHandler}
 										{inputFilesHandler}
@@ -1563,193 +1642,243 @@
 											chatInput?.focus();
 										}}
 									>
-										<div
+										<button
+											type="button"
 											id="input-menu-button"
-											class="bg-transparent hover:bg-gray-100 text-gray-700 dark:text-white dark:hover:bg-gray-800 rounded-full size-8 flex justify-center items-center outline-hidden focus:outline-hidden"
+											class="bg-transparent hover:bg-gray-100 text-gray-700 dark:text-white dark:hover:bg-gray-800 rounded-full size-8 flex justify-center items-center outline-hidden focus:outline-hidden shrink-0"
+											aria-label={$i18n.t('More')}
 										>
 											<PlusAlt className="size-5.5" />
-										</div>
+										</button>
 									</InputMenu>
 
-									{#if showWebSearchButton || showImageGenerationButton || showToolsButton || (toggleFilters && toggleFilters.length > 0)}
+									{#if showWebSearchButton || showImageGenerationButton || showToolsButton || showSkillsButton || (toggleFilters && toggleFilters.length > 0)}
 										<div
-											class="flex self-center w-[1px] h-4 mx-1 bg-gray-200/50 dark:bg-gray-800/50"
+											class="flex self-center w-[1px] h-4 mx-1 bg-gray-200/50 dark:bg-gray-800/50 shrink-0"
 										/>
-
-										<IntegrationsMenu
-											selectedModels={atSelectedModel ? [atSelectedModel.id] : selectedModels}
-											{toggleFilters}
-											{showWebSearchButton}
-											{showImageGenerationButton}
-											bind:selectedToolIds
-											bind:selectedFilterIds
-											bind:webSearchEnabled
-											bind:imageGenerationEnabled
-											closeOnOutsideClick={integrationsMenuCloseOnOutsideClick}
-											onShowValves={(e) => {
-												const { type, id } = e;
-												selectedValvesType = type;
-												selectedValvesItemId = id;
-												showValvesModal = true;
-												integrationsMenuCloseOnOutsideClick = false;
-											}}
-											onClose={async () => {
-												await tick();
-
-												const chatInput = document.getElementById('chat-input');
-												chatInput?.focus();
-											}}
-										>
-											<div
-												id="integration-menu-button"
-												class="bg-transparent hover:bg-gray-100 text-gray-700 dark:text-white dark:hover:bg-gray-800 rounded-full size-8 flex justify-center items-center outline-hidden focus:outline-hidden"
-											>
-												<Component className="size-4.5" strokeWidth="1.5" />
-											</div>
-										</IntegrationsMenu>
 									{/if}
 
-									{#if selectedModelIds.length === 1 && $models.find((m) => m.id === selectedModelIds[0])?.has_user_valves}
-										<div class="ml-1 flex gap-1.5">
-											<Tooltip content={$i18n.t('Valves')} placement="top">
-												<button
-													type="button"
-													id="model-valves-button"
-													class="bg-transparent hover:bg-gray-100 text-gray-700 dark:text-white dark:hover:bg-gray-800 rounded-full size-8 flex justify-center items-center outline-hidden focus:outline-hidden"
-													on:click={() => {
-														selectedValvesType = 'function';
-														selectedValvesItemId = selectedModelIds[0]?.split('.')[0];
-														showValvesModal = true;
-													}}
-												>
-													<Knobs className="size-4" strokeWidth="1.5" />
-												</button>
-											</Tooltip>
-										</div>
-									{/if}
+									<div class="flex flex-1 items-center min-w-0 overflow-x-auto scrollbar-none">
+										{#if showWebSearchButton || showImageGenerationButton || showToolsButton || showSkillsButton || (toggleFilters && toggleFilters.length > 0)}
+											<IntegrationsMenu
+												selectedModels={selectedModelIds}
+												{toggleFilters}
+												{showWebSearchButton}
+												{showImageGenerationButton}
+												bind:selectedToolIds
+												bind:selectedSkillIds
+												bind:selectedFilterIds
+												bind:webSearchEnabled
+												bind:imageGenerationEnabled
+												{onWebSearchToggle}
+												closeOnOutsideClick={integrationsMenuCloseOnOutsideClick}
+												onShowValves={(e) => {
+													const { type, id } = e;
+													selectedValvesType = type;
+													selectedValvesItemId = id;
+													showValvesModal = true;
+													integrationsMenuCloseOnOutsideClick = false;
+												}}
+												onClose={async () => {
+													await tick();
 
-									<div class="ml-1 flex gap-1.5">
-										{#if (selectedToolIds ?? []).length > 0}
-											<Tooltip
-												content={$i18n.t('{{COUNT}} Available Tools', {
-													COUNT: (selectedToolIds ?? []).length
-												})}
+													const chatInput = document.getElementById('chat-input');
+													chatInput?.focus();
+												}}
 											>
 												<button
-													class="translate-y-[0.5px] px-1 flex gap-1 items-center text-gray-600 dark:text-gray-300 hover:text-gray-700 dark:hover:text-gray-200 rounded-lg self-center transition"
-													aria-label="Available Tools"
 													type="button"
-													on:click={() => {
-														showTools = !showTools;
-													}}
+													id="integration-menu-button"
+													class="bg-transparent hover:bg-gray-100 text-gray-700 dark:text-white dark:hover:bg-gray-800 rounded-full size-8 flex justify-center items-center outline-hidden focus:outline-hidden shrink-0"
+													aria-label={$i18n.t('Integrations')}
 												>
-													<Wrench className="size-4" strokeWidth="1.75" />
-
-													<span class="text-sm">
-														{(selectedToolIds ?? []).length}
-													</span>
+													<Component className="size-4.5" strokeWidth="1.5" />
 												</button>
-											</Tooltip>
+											</IntegrationsMenu>
 										{/if}
 
-										{#each selectedFilterIds as filterId (filterId)}
-											{@const filter = toggleFilters.find((f) => f.id === filterId)}
-											{#if filter}
-												<Tooltip content={filter?.name} placement="top">
+										{#if selectedModelIds.length === 1 && $models.find((m) => m.id === selectedModelIds[0])?.has_user_valves}
+											<div class="ml-1 flex gap-1.5 shrink-0">
+												<Tooltip content={$i18n.t('Valves')} placement="top">
 													<button
-														on:click|preventDefault={() => {
-															selectedFilterIds = selectedFilterIds.filter((id) => id !== filterId);
-														}}
 														type="button"
-														class="group p-[7px] flex gap-1.5 items-center text-sm rounded-full transition-colors duration-300 focus:outline-hidden max-w-full overflow-hidden {selectedFilterIds.includes(
-															filterId
-														)
-															? 'text-sky-500 dark:text-sky-300 bg-sky-50 hover:bg-sky-100 dark:bg-sky-400/10 dark:hover:bg-sky-600/10 border border-sky-200/40 dark:border-sky-500/20'
-															: 'bg-transparent text-gray-600 dark:text-gray-300 hover:bg-gray-50 dark:hover:bg-gray-800 '} capitalize"
+														id="model-valves-button"
+														class="bg-transparent hover:bg-gray-100 text-gray-700 dark:text-white dark:hover:bg-gray-800 rounded-full size-8 flex justify-center items-center outline-hidden focus:outline-hidden"
+														on:click={() => {
+															selectedValvesType = 'function';
+															selectedValvesItemId = selectedModelIds[0]?.split('.')[0];
+															showValvesModal = true;
+														}}
 													>
-														{#if filter?.icon}
-															<div class="size-4 items-center flex justify-center">
-																<img
-																	src={filter.icon}
-																	class="size-3.5 {filter.icon.includes('data:image/svg')
-																		? 'dark:invert-[80%]'
-																		: ''}"
-																	style="fill: currentColor;"
-																	alt={filter.name}
-																/>
+														<Knobs className="size-4" strokeWidth="1.5" />
+													</button>
+												</Tooltip>
+											</div>
+										{/if}
+
+										<div class="ml-1 flex gap-1.5 shrink-0">
+											{#if (selectedToolIds ?? []).length > 0}
+												<Tooltip
+													content={$i18n.t('{{COUNT}} Available Tools', {
+														COUNT: (selectedToolIds ?? []).length
+													})}
+												>
+													<button
+														class="translate-y-[0.5px] px-1 flex gap-1 items-center text-gray-600 dark:text-gray-300 hover:text-gray-700 dark:hover:text-gray-200 rounded-lg self-center transition"
+														aria-label="Available Tools"
+														type="button"
+														on:click={() => {
+															showTools = !showTools;
+														}}
+													>
+														<Wrench className="size-4" strokeWidth="1.75" />
+
+														<span class="text-sm">
+															{(selectedToolIds ?? []).length}
+														</span>
+													</button>
+												</Tooltip>
+											{/if}
+
+											{#if (selectedSkillIds ?? []).length > 0}
+												<Tooltip
+													content={$i18n.t('{{COUNT}} Available Skills', {
+														COUNT: (selectedSkillIds ?? []).length
+													})}
+												>
+													<button
+														class="translate-y-[0.5px] px-1 flex gap-1 items-center text-gray-600 dark:text-gray-300 hover:text-gray-700 dark:hover:text-gray-200 rounded-lg self-center transition"
+														aria-label="Available Skills"
+														type="button"
+														on:click={() => {
+															showSkills = !showSkills;
+														}}
+													>
+														<Keyframes className="size-4" strokeWidth="1.75" />
+
+														<span class="text-sm">
+															{(selectedSkillIds ?? []).length}
+														</span>
+													</button>
+												</Tooltip>
+											{/if}
+
+											{#each selectedFilterIds as filterId (filterId)}
+												{@const filter = toggleFilters.find((f) => f.id === filterId)}
+												{#if filter}
+													<Tooltip content={filter?.name} placement="top">
+														<button
+															on:click|preventDefault={() => {
+																if (
+																	filter?.has_user_valves &&
+																	($_user?.role === 'admin' ||
+																		($_user?.permissions?.chat?.valves ?? true))
+																) {
+																	selectedValvesType = 'function';
+																	selectedValvesItemId = filterId;
+																	showValvesModal = true;
+																} else {
+																	selectedFilterIds = selectedFilterIds.filter(
+																		(id) => id !== filterId
+																	);
+																}
+															}}
+															type="button"
+															class="group p-[7px] flex gap-1.5 items-center text-sm rounded-full transition-colors duration-300 focus:outline-hidden max-w-full overflow-hidden {selectedFilterIds.includes(
+																filterId
+															)
+																? 'text-sky-500 dark:text-sky-300 bg-sky-50 hover:bg-sky-100 dark:bg-sky-400/10 dark:hover:bg-sky-600/10 border border-sky-200/40 dark:border-sky-500/20'
+																: 'bg-transparent text-gray-600 dark:text-gray-300 hover:bg-gray-50 dark:hover:bg-gray-800 '} capitalize"
+														>
+															{#if filter?.icon}
+																<div class="size-4 items-center flex justify-center">
+																	<img
+																		src={filter.icon}
+																		class="size-3.5 {filter.icon.includes('data:image/svg')
+																			? 'dark:invert-[80%]'
+																			: ''}"
+																		style="fill: currentColor;"
+																		alt={filter.name}
+																	/>
+																</div>
+															{:else}
+																<Sparkles className="size-4" strokeWidth="1.75" />
+															{/if}
+															<!-- svelte-ignore a11y-click-events-have-key-events -->
+															<!-- svelte-ignore a11y-no-static-element-interactions -->
+															<div
+																class="hidden group-hover:block"
+																on:click={(e) => {
+																	e.stopPropagation();
+																	e.preventDefault();
+																	selectedFilterIds = selectedFilterIds.filter(
+																		(id) => id !== filterId
+																	);
+																}}
+															>
+																<XMark className="size-4" strokeWidth="1.75" />
 															</div>
-														{:else}
-															<Sparkles className="size-4" strokeWidth="1.75" />
-														{/if}
+														</button>
+													</Tooltip>
+												{/if}
+											{/each}
+
+											{#if webSearchEnabled}
+												<Tooltip content={$i18n.t('Web Search')} placement="top">
+													<button
+														on:click|preventDefault={() => (webSearchEnabled = !webSearchEnabled)}
+														type="button"
+														class="group p-[7px] flex gap-1.5 items-center text-sm rounded-full transition-colors duration-300 focus:outline-hidden max-w-full overflow-hidden {webSearchEnabled ||
+														($settings?.webSearch ?? false) === 'always'
+															? ' text-sky-500 dark:text-sky-300 bg-sky-50 hover:bg-sky-100 dark:bg-sky-400/10 dark:hover:bg-sky-600/10 border border-sky-200/40 dark:border-sky-500/20'
+															: 'bg-transparent text-gray-600 dark:text-gray-300 hover:bg-gray-50 dark:hover:bg-gray-800 '}"
+													>
+														<GlobeAlt className="size-4" strokeWidth="1.75" />
 														<div class="hidden group-hover:block">
 															<XMark className="size-4" strokeWidth="1.75" />
 														</div>
 													</button>
 												</Tooltip>
 											{/if}
-										{/each}
 
-										{#if webSearchEnabled}
-											<Tooltip content={$i18n.t('Web Search')} placement="top">
-												<button
-													on:click|preventDefault={() => (webSearchEnabled = !webSearchEnabled)}
-													type="button"
-													class="group p-[7px] flex gap-1.5 items-center text-sm rounded-full transition-colors duration-300 focus:outline-hidden max-w-full overflow-hidden {webSearchEnabled ||
-													($settings?.webSearch ?? false) === 'always'
-														? ' text-sky-500 dark:text-sky-300 bg-sky-50 hover:bg-sky-100 dark:bg-sky-400/10 dark:hover:bg-sky-600/10 border border-sky-200/40 dark:border-sky-500/20'
-														: 'bg-transparent text-gray-600 dark:text-gray-300 hover:bg-gray-50 dark:hover:bg-gray-800 '}"
-												>
-													<GlobeAlt className="size-4" strokeWidth="1.75" />
-													<div class="hidden group-hover:block">
-														<XMark className="size-4" strokeWidth="1.75" />
-													</div>
-												</button>
-											</Tooltip>
-										{/if}
-
-										{#if imageGenerationEnabled}
-											<Tooltip content={$i18n.t('Image')} placement="top">
-												<button
-													on:click|preventDefault={() =>
-														(imageGenerationEnabled = !imageGenerationEnabled)}
-													type="button"
-													class="group p-[7px] flex gap-1.5 items-center text-sm rounded-full transition-colors duration-300 focus:outline-hidden max-w-full overflow-hidden {imageGenerationEnabled
-														? ' text-sky-500 dark:text-sky-300 bg-sky-50 hover:bg-sky-100 dark:bg-sky-400/10 dark:hover:bg-sky-700/10 border border-sky-200/40 dark:border-sky-500/20'
-														: 'bg-transparent text-gray-600 dark:text-gray-300 hover:bg-gray-50 dark:hover:bg-gray-800 '}"
-												>
-													<Photo className="size-4" strokeWidth="1.75" />
-													<div class="hidden group-hover:block">
-														<XMark className="size-4" strokeWidth="1.75" />
-													</div>
-												</button>
-											</Tooltip>
-										{/if}
-
-										{#each pendingOAuthTools as pendingTool (pendingTool.id)}
-											<Tooltip content={$i18n.t('Click to connect')} placement="top">
-												<button
-													on:click|preventDefault={() => {
-														sessionStorage.setItem('pendingOAuthToolId', pendingTool.id);
-														const authUrl = getOAuthClientAuthorizationUrl(
-															pendingTool.serverId,
-															pendingTool.authType ?? 'mcp'
-														);
-														window.open(authUrl, '_self', 'noopener');
-													}}
-													type="button"
-													class="group px-2 py-[5px] flex gap-1.5 items-center text-xs rounded-full transition-colors duration-300 focus:outline-hidden max-w-full overflow-hidden
+											{#if imageGenerationEnabled}
+												<Tooltip content={$i18n.t('Image')} placement="top">
+													<button
+														on:click|preventDefault={() =>
+															(imageGenerationEnabled = !imageGenerationEnabled)}
+														type="button"
+														class="group p-[7px] flex gap-1.5 items-center text-sm rounded-full transition-colors duration-300 focus:outline-hidden max-w-full overflow-hidden {imageGenerationEnabled
+															? ' text-sky-500 dark:text-sky-300 bg-sky-50 hover:bg-sky-100 dark:bg-sky-400/10 dark:hover:bg-sky-700/10 border border-sky-200/40 dark:border-sky-500/20'
+															: 'bg-transparent text-gray-600 dark:text-gray-300 hover:bg-gray-50 dark:hover:bg-gray-800 '}"
+													>
+														<Photo className="size-4" strokeWidth="1.75" />
+														<div class="hidden group-hover:block">
+															<XMark className="size-4" strokeWidth="1.75" />
+														</div>
+													</button>
+												</Tooltip>
+											{/if}
+											{#each pendingOAuthTools as pendingTool (pendingTool.id)}
+												<Tooltip content={$i18n.t('Click to connect')} placement="top">
+													<button
+														on:click|preventDefault={() => {
+															initiateOAuthRedirect(pendingTool);
+														}}
+														type="button"
+														class="group px-2 py-[5px] flex gap-1.5 items-center text-xs rounded-full transition-colors duration-300 focus:outline-hidden max-w-full overflow-hidden
 														text-amber-600 dark:text-amber-400 bg-amber-50 hover:bg-amber-100 dark:bg-amber-400/10 dark:hover:bg-amber-600/10 border border-amber-200/40 dark:border-amber-500/20"
-												>
-													<Wrench className="size-3.5" strokeWidth="1.75" />
-													<span class="truncate">{pendingTool.name}</span>
-												</button>
-											</Tooltip>
-										{/each}
+													>
+														<Wrench className="size-3.5" strokeWidth="1.75" />
+														<span class="truncate">{pendingTool.name}</span>
+													</button>
+												</Tooltip>
+											{/each}
+										</div>
 									</div>
 								</div>
 
 								<div class="self-end flex space-x-1 mr-1 shrink-0 gap-[0.5px]">
-									{#if (taskIds && taskIds.length > 0) || (history.currentId && history.messages[history.currentId]?.done != true) || generating}
+									{#if isActive && prompt === '' && files.length === 0}
 										<div class=" flex items-center">
 											<Tooltip content={$i18n.t('Stop')}>
 												<button
@@ -1840,9 +1969,9 @@
 																return;
 															}
 
-															if ($config.audio.stt.engine === 'web') {
+															if (!$config.audio.stt.engine || !$config.audio.tts.engine) {
 																toast.error(
-																	$i18n.t('Call feature is not supported when using Web STT engine')
+																	$i18n.t('Voice mode requires external STT and TTS providers')
 																);
 
 																return;
@@ -1860,20 +1989,6 @@
 																}
 
 																stream = null;
-
-																if ($settings.audio?.tts?.engine === 'browser-kokoro') {
-																	// If the user has not initialized the TTS worker, initialize it
-																	if (!$TTSWorker) {
-																		await TTSWorker.set(
-																			new KokoroWorker({
-																				dtype: $settings.audio?.tts?.engineConfig?.dtype ?? 'fp32'
-																			})
-																		);
-
-																		await $TTSWorker.init();
-																	}
-																}
-
 																showCallOverlay.set(true);
 																showControls.set(true);
 															} catch (err) {

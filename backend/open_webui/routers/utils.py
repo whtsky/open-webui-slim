@@ -1,19 +1,17 @@
-import black
+from __future__ import annotations
+
 import logging
-import markdown
 
-from open_webui.models.chats import ChatTitleMessagesForm
-from open_webui.config import DATA_DIR, ENABLE_ADMIN_EXPORT
+import black
+from fastapi import APIRouter, Depends, HTTPException, Response, status
+from open_webui.config import ENABLE_ADMIN_EXPORT
 from open_webui.constants import ERROR_MESSAGES
-from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
-from pydantic import BaseModel
-from starlette.responses import FileResponse
-
-
+from open_webui.models.chats import ChatTitleMessagesForm
+from open_webui.utils.auth import get_admin_user, get_verified_user
 from open_webui.utils.misc import get_gravatar_url
 from open_webui.utils.pdf_generator import PDFGenerator
-from open_webui.utils.auth import get_admin_user, get_verified_user
-from open_webui.utils.code_interpreter import execute_code_jupyter
+from pydantic import BaseModel
+from starlette.responses import FileResponse
 
 log = logging.getLogger(__name__)
 
@@ -30,7 +28,7 @@ class CodeForm(BaseModel):
 
 
 @router.post('/code/format')
-async def format_code(form_data: CodeForm, user=Depends(get_admin_user)):
+async def format_code(form_data: CodeForm, user=Depends(get_verified_user)):
     try:
         formatted_code = black.format_str(form_data.code, mode=black.Mode())
         return {'code': formatted_code}
@@ -38,48 +36,6 @@ async def format_code(form_data: CodeForm, user=Depends(get_admin_user)):
         return {'code': form_data.code}
     except Exception as e:
         raise HTTPException(status_code=400, detail=str(e))
-
-
-@router.post('/code/execute')
-async def execute_code(request: Request, form_data: CodeForm, user=Depends(get_verified_user)):
-    if not request.app.state.config.ENABLE_CODE_EXECUTION:
-        raise HTTPException(
-            status_code=403,
-            detail=ERROR_MESSAGES.FEATURE_DISABLED('Code execution'),
-        )
-
-    if request.app.state.config.CODE_EXECUTION_ENGINE == 'jupyter':
-        output = await execute_code_jupyter(
-            request.app.state.config.CODE_EXECUTION_JUPYTER_URL,
-            form_data.code,
-            (
-                request.app.state.config.CODE_EXECUTION_JUPYTER_AUTH_TOKEN
-                if request.app.state.config.CODE_EXECUTION_JUPYTER_AUTH == 'token'
-                else None
-            ),
-            (
-                request.app.state.config.CODE_EXECUTION_JUPYTER_AUTH_PASSWORD
-                if request.app.state.config.CODE_EXECUTION_JUPYTER_AUTH == 'password'
-                else None
-            ),
-            request.app.state.config.CODE_EXECUTION_JUPYTER_TIMEOUT,
-        )
-
-        return output
-    else:
-        raise HTTPException(
-            status_code=400,
-            detail=ERROR_MESSAGES.DEFAULT('Code execution engine not supported'),
-        )
-
-
-class MarkdownForm(BaseModel):
-    md: str
-
-
-@router.post('/markdown')
-async def get_html_from_markdown(form_data: MarkdownForm, user=Depends(get_verified_user)):
-    return {'html': markdown.markdown(form_data.md)}
 
 
 class ChatForm(BaseModel):
@@ -104,20 +60,18 @@ async def download_chat_as_pdf(form_data: ChatTitleMessagesForm, user=Depends(ge
 
 @router.get('/db/download')
 async def download_db(user=Depends(get_admin_user)):
+    """Download the raw SQLite database file (admin-only, SQLite deployments only)."""
     if not ENABLE_ADMIN_EXPORT:
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail=ERROR_MESSAGES.ACCESS_PROHIBITED,
-        )
+        raise HTTPException(status.HTTP_401_UNAUTHORIZED, detail=ERROR_MESSAGES.ACCESS_PROHIBITED)
+
+    # Lazy import avoids circular dependency at module load time
     from open_webui.internal.db import engine
 
     if engine.name != 'sqlite':
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail=ERROR_MESSAGES.DB_NOT_SQLITE,
-        )
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, detail=ERROR_MESSAGES.DB_NOT_SQLITE)
+
     return FileResponse(
-        engine.url.database,
+        str(engine.url.database),
         media_type='application/octet-stream',
         filename='webui.db',
     )

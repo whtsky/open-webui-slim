@@ -10,7 +10,9 @@ export const DEFAULT_PERMISSIONS = {
 		prompts_import: false,
 		prompts_export: false,
 		tools_import: false,
-		tools_export: false
+		tools_export: false,
+		skills_import: false,
+		skills_export: false
 	},
 	sharing: {
 		models: false,
@@ -22,7 +24,10 @@ export const DEFAULT_PERMISSIONS = {
 		tools: false,
 		public_tools: false,
 		skills: false,
-		public_skills: false
+		public_skills: false,
+		folders: false,
+		public_chats: false,
+		public_calendars: false
 	},
 	access_grants: {
 		allow_users: true
@@ -38,10 +43,10 @@ export const DEFAULT_PERMISSIONS = {
 		delete_message: true,
 		continue_response: true,
 		regenerate_response: true,
-		rate_response: true,
 		edit: true,
 		share: true,
 		export: true,
+		import: true,
 		stt: true,
 		tts: true,
 		call: true,
@@ -55,7 +60,10 @@ export const DEFAULT_PERMISSIONS = {
 		direct_tool_servers: false,
 		web_search: true,
 		image_generation: true,
-		memories: true
+		memories: true,
+		automations: false,
+		calendar: true,
+		webhooks: false
 	},
 	settings: {
 		interface: true

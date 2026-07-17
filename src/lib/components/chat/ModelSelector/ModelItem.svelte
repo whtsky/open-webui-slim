@@ -2,6 +2,7 @@
 	import { marked } from 'marked';
 
 	import { getContext, tick } from 'svelte';
+
 	import { mobile, settings, user } from '$lib/stores';
 	import { WEBUI_API_BASE_URL, WEBUI_BASE_URL } from '$lib/constants';
 
@@ -19,10 +20,10 @@
 	export let selectedModelIdx: number = -1;
 	export let item: any = {};
 	export let index: number = -1;
-	export let value: string = '';
+	export let value: string | null = '';
 
 	export let pinModelHandler: (modelId: string) => void = () => {};
-	export let deleteModelHandler: (model: any) => void = () => {};
+	export let selectionOnly = false;
 
 	export let onClick: () => void = () => {};
 
@@ -95,7 +96,6 @@
 			</div>
 
 			<div class=" shrink-0 flex items-center gap-2">
-
 				<!-- {JSON.stringify(item.info)} -->
 
 				{#if (item?.model?.tags ?? []).length > 0}
@@ -188,27 +188,28 @@
 	</div>
 
 	<div class="ml-auto pl-2 pr-1 flex items-center gap-1.5 shrink-0">
-		<ModelItemMenu
-			bind:show={showMenu}
-			model={item.model}
-			{pinModelHandler}
-			{deleteModelHandler}
-			copyLinkHandler={() => {
-				copyLinkHandler(item.model);
-			}}
-		>
-			<button
-				aria-label={`${$i18n.t('More Options')}`}
-				class="flex"
-				on:click={(e) => {
-					e.preventDefault();
-					e.stopPropagation();
-					showMenu = !showMenu;
+		{#if !selectionOnly}
+			<ModelItemMenu
+				bind:show={showMenu}
+				model={item.model}
+				{pinModelHandler}
+				copyLinkHandler={() => {
+					copyLinkHandler(item.model);
 				}}
 			>
-				<EllipsisHorizontal />
-			</button>
-		</ModelItemMenu>
+				<button
+					aria-label={`${$i18n.t('More Options')}`}
+					class="flex"
+					on:click={(e) => {
+						e.preventDefault();
+						e.stopPropagation();
+						showMenu = !showMenu;
+					}}
+				>
+					<EllipsisHorizontal />
+				</button>
+			</ModelItemMenu>
+		{/if}
 
 		{#if value === item.value}
 			<div>

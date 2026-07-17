@@ -1,163 +1,103 @@
 # Open WebUI Slim
 
-> **An opinionated fork of [Open WebUI](https://github.com/open-webui/open-webui) (v0.8.12) focused on reducing resource usage and improving speed by removing heavyweight local ML dependencies.**
+Open WebUI Slim is an opinionated fork of [Open WebUI](https://github.com/open-webui/open-webui), currently based on **v0.10.2**. It keeps the hosted/API-backed Open WebUI experience while removing local model inference and several optional products to reduce dependency, image, memory, and maintenance overhead.
 
-## Why This Fork?
-
-Upstream Open WebUI bundles PyTorch and local ML models for embedding, reranking, speech-to-text, and text-to-speech. This adds ~2.5 GB of Python packages (CPU) plus ~500 MB of pre-downloaded models to the Docker image, even when you're using external API providers for all of these.
-
-This fork removes those local ML features entirely, producing a leaner image for deployments that use external APIs (OpenAI, Azure, Deepgram, ElevenLabs, etc.) for inference.
+This fork is intended for deployments that use OpenAI-compatible or other external providers. It does not support Ollama, CUDA, or in-process ML models.
 
 ## What's Removed
 
-The following packages have been removed from `requirements.txt` and `pyproject.toml`:
+### Local ML and GPU support
 
-| Package                              | What it powered                                  | Alternative                                                        |
-| ------------------------------------ | ------------------------------------------------ | ------------------------------------------------------------------ |
-| `torch`, `torchvision`, `torchaudio` | PyTorch runtime (~1.5 GB CPU)                    | Not needed — all local ML removed                                  |
-| `sentence-transformers`              | Local RAG embedding & CrossEncoder reranking     | Set `RAG_EMBEDDING_ENGINE` to `openai` or `azure_openai`           |
-| `transformers`                       | Local TTS via `microsoft/speecht5_tts`           | Set `AUDIO_TTS_ENGINE` to `openai`, `elevenlabs`, or `azure`       |
-| `accelerate`                         | PyTorch GPU acceleration                         | Not needed                                                         |
-| `faster-whisper`                     | Local Whisper speech-to-text                     | Set `AUDIO_STT_ENGINE` to `openai`, `deepgram`, or `azure`         |
-| `onnxruntime`                        | ONNX inference backend for faster-whisper        | Not needed                                                         |
-| `colbert-ai`                         | ColBERT dense reranking                          | Set `RAG_RERANKING_ENGINE` to `external`                           |
-| `sentencepiece`                      | Tokenizer for transformers/sentence-transformers | Not needed                                                         |
-| `soundfile`                          | Audio I/O for local TTS                          | Not needed                                                         |
-| `einops`                             | Tensor operations for sentence-transformers      | Not needed                                                         |
-| `pyarrow`                            | DataFrame serialization for datasets             | Not needed                                                         |
-| `opencv-python-headless`             | Legacy local OCR/image-processing dependency     | Not needed — no code imports `cv2`; local OCR is removed/API-based |
+- PyTorch and its ecosystem: `torch`, `torchvision`, `torchaudio`, `transformers`, `sentence-transformers`, `accelerate`, and `colbert-ai`
+- Local embedding and reranking models; embeddings must use `openai` or `azure_openai`, and reranking must use an external API or remain disabled
+- Local Whisper, browser Web Speech, Kokoro/ONNX TTS, OCR models, and their model-download/runtime dependencies
+- CUDA/GPU image variants, CUDA environment setup, and model pre-download steps
+- Embedded Chroma, whose full package pulls ONNX and Hugging Face runtimes; remote Chroma remains supported through `chromadb-client`
 
-Also removed from container/build tooling:
+### Providers and products
 
-- Explicit `pip install torch torchvision torchaudio` step
-- All CUDA build args and logic (`USE_CUDA`, `USE_CUDA_VER`)
-- All ML model pre-downloads (sentence-transformers models, Whisper model)
-- Build-time compilation dependencies (`build-essential`, `gcc`, `python3-dev`, `libmariadb-dev`, `libsm6`, `libxext6`)
-- Bundled local model-server Docker/Compose sidecars and helper scripts
-- All Ollama integration code and UI (backend `/ollama` routes, model management UI, connection settings, and Ollama-specific search/embedding paths)
+- Ollama routes, discovery, dispatch, settings, Docker sidecars, and helper scripts
+- Pyodide, Jupyter/code interpreter, executable code blocks, terminals, and OpenTerminal
+- Community publishing/sync and external community statistics export
+- Ratings, evaluations, arena models, and leaderboards
+- Notes and Channels, including their user interfaces, APIs, socket handlers, and direct collaboration wiring
+- Playground, `/watch`, and the empty `/home` placeholder route
 
-### Source code changes
-
-Backend Python files modified to return clear error messages if local ML features are attempted:
-
-- `backend/open_webui/env.py` — Removed torch CUDA/MPS detection; always sets `DEVICE_TYPE='cpu'`
-- `backend/open_webui/__init__.py` — Removed CUDA LD_LIBRARY_PATH setup and torch validation
-- `backend/open_webui/routers/retrieval.py` — Local embedding (`get_ef`) and local reranking (`get_rf`) raise errors directing users to external engines; removed `torch.cuda.empty_cache()` calls
-- `backend/open_webui/routers/audio.py` — `set_faster_whisper_model()` returns None with warning; `load_speech_pipeline()` raises NotImplementedError; transformers TTS endpoint returns 501
-- `backend/open_webui/retrieval/utils.py` — Replaced `sentence_transformers.util.cos_sim` with numpy-based cosine similarity
-
-Additional slim-only removals in this fork:
-
-- Ollama support has been fully removed from backend routing, frontend settings/model management, Docker/Compose helpers, and related documentation/config. This fork is now strictly external-provider / OpenAI-compatible API based.
-- **Community Sharing** — Removed chat stats export, community sync modal, admin toggle, and all frontend actions that published content to `openwebui.com`.
-- **Code Execution / Code Interpreter** — Fully removed. This eliminates:
-  - Pyodide WASM Python runtime and 50 pre-bundled scientific packages (~61 MB of static assets)
-  - Jupyter remote kernel integration (backend `code_interpreter.py`, WebSocket client)
-  - Code Interpreter chat feature (prompt injection, streaming tag detection, execution result rendering)
-  - Admin settings panel for code execution configuration (17 environment variables removed)
-  - `pyodide` and `@pyscript/core` npm packages (~19 MB)
-  - `RestrictedPython` pip package
-  - Run button on Python code blocks, Pyodide file browser, model `code_interpreter` capability
-  - Python code formatting (`/code/format` endpoint) is kept and now available to all authenticated users
-- **Ratings / Evaluations / Arena Models** — Removed the feedback database model and evaluations API/admin UI, the thumbs up/down response rating flow, and the anonymous arena-model wrapper system.
-- **Notes (Beta)** — Removed the collaborative notes feature including the notes model/router, all notes CRUD components, sidebar/search/input-menu integration, notes builtin tools, knowledge-selector notes search, Yjs note document handlers in Socket.IO, and admin toggle. Database migration files are preserved.
-- **Channels (Beta)** — Removed the real-time messaging channels feature including the channels model/router/utils, all channel UI components (~17 files), sidebar channel list and creation modal, channels builtin tools, channel message webhooks, Socket.IO channel room/event handlers, admin toggle, user permission toggles, Yjs collaboration provider, and `yjs`/`y-prosemirror`/`y-protocols` npm packages. Shared components (ProfilePreview, UserStatus) relocated to `common/`. Database migration files are preserved.
-- **OpenTerminal support** — Removed the entire Open Terminal integration (~2,600 LOC). This includes terminal tool resolution in the chat pipeline, terminal server configuration/startup, the `/api/v1/terminals` router, xterm.js terminal UI, file browser (FileNav), terminal menu, admin/user terminal server settings, and 3 npm packages (`@xterm/xterm`, `@xterm/addon-fit`, `@xterm/addon-web-links`).
-- **Playground** — Removed the admin-only API playground feature (Chat, Completions, and Images tabs), including 3 routes, 5 components, the `imageEdits` API client function, the playground layout, and its navigation link in the user menu.
-- **`/watch` route** — Removed the YouTube URL redirect route (`/watch?v=VIDEO_ID` → `/?youtube=VIDEO_ID`) from both frontend and backend middleware. YouTube videos can still be added to chats by pasting URLs directly.
-- **`/home` route** — Removed empty placeholder home page and its layout (which contained a dead link to `/playground/calendar`).
-
-### Database performance optimizations
-
-The upstream chat subsystem has several query patterns that cause excessive memory usage and can trigger OOM on large instances ([open-webui/open-webui#23192](https://github.com/open-webui/open-webui/issues/23192)). This fork fixes them:
-
-- **`_sanitize_chat_row()` moved to write paths only** — upstream calls this recursive null-byte cleaner on every `get_chat_by_id()` read, which can trigger unexpected DB commits. Now runs only during `insert_new_chat()`, `update_chat_by_id()`, and `import_chats()`.
-- **Column projection on 5 list queries** — `get_chat_list_by_user_id()`, `get_chats_by_folder_id_and_user_id()`, `get_chats_by_folder_ids_and_user_id()`, `get_chat_list_by_chat_ids()`, and `get_chat_list_by_user_id_and_tag_name()` now use `.with_entities()` to select only `id, title, updated_at, created_at` instead of loading the full JSON chat blob.
-- **Pagination added** to `/api/v1/chats/all/archived` and `/api/v1/chats/folder/{id}` endpoints (previously unbounded).
-- **Status history dual-write fix** — `add_message_status_to_chat_by_id_and_message_id()` now writes to both the JSON blob and the `chat_message` table, closing a data consistency gap.
-- **Message reads migrated to `chat_message` table** — `get_messages_map_by_chat_id()` and `get_message_by_id_and_message_id()` now read from the normalized `chat_message` table first (with chain integrity validation), falling back to the JSON blob only when necessary. This avoids loading the full chat JSON for every message access in middleware and WebSocket handlers.
+Historical database migrations for removed products remain in place so existing databases can still traverse the upstream migration chain. Shared syntax highlighting and authenticated code formatting are also retained; they do not execute user code.
 
 ## What's Kept
 
-Everything else from upstream Open WebUI v0.8.12:
+The fork adopts upstream v0.10.2 features that do not depend on a removed subsystem, including:
 
-- All LLM chat features via OpenAI-compatible APIs
-- RAG with external embedding providers (OpenAI, Azure OpenAI)
-- External reranking via API
-- Web search integration (SearXNG, Google PSE, Brave, DuckDuckGo, etc.)
-- All authentication methods (LDAP, SSO, OAuth, SCIM)
-- Admin panel, user management, RBAC
-- Markdown/LaTeX rendering
-- Image generation (DALL-E, Gemini, ComfyUI, AUTOMATIC1111)
-- Pipelines plugin support
-- All database backends (SQLite, PostgreSQL)
-- All vector database backends (ChromaDB, PGVector, Qdrant, Milvus, Elasticsearch, etc.)
-- Optimized chat database queries (column projection, pagination, normalized message reads)
-- STT via external providers (OpenAI, Deepgram, Azure, Mistral)
-- TTS via external providers (OpenAI, ElevenLabs, Azure)
-- Progressive Web App
-- i18n / multilingual support
-- OpenTelemetry observability
+- Core single- and multi-model chat through OpenAI-compatible and other external APIs
+- Automations, calendar, skills, context summaries/compaction, memories, shared folders, and knowledge directories
+- RAG with external embeddings, optional external reranking, web search, and externally configured vector databases
+- External STT through OpenAI-compatible, Deepgram, Azure, or Mistral APIs
+- External TTS through OpenAI-compatible, ElevenLabs, Azure, or Mistral APIs
+- Authentication and administration features including LDAP, OAuth/OIDC, SSO, SCIM, RBAC, and access grants
+- Image generation, pipelines, MCP/tool servers, Markdown/LaTeX rendering, PWA support, i18n, and OpenTelemetry
+- SQLite and PostgreSQL application databases plus upstream external vector-store integrations
+
+The fork also preserves its chat scalability work on the v0.10.2 async database architecture: projected chat-list queries, normalized `chat_message` reads with JSON fallback, status-history dual writes, write-time sanitization, and batched NDJSON chat exports.
 
 ## Getting Started
 
 ### Docker
 
 ```bash
-docker run -d -p 3000:8080 \
+docker run -d \
+  --name open-webui-slim \
+  -p 3000:8080 \
   -e OPENAI_API_KEY=your_key \
   -v open-webui:/app/backend/data \
-  --name open-webui \
-  --restart always \
+  --restart unless-stopped \
   ghcr.io/OWNER/open-webui-slim:slim
 ```
 
-Replace `OWNER` with your GitHub username/org. The image is built automatically on push to the `slim` branch.
+Replace `OWNER/open-webui-slim` with this fork's GitHub repository name.
 
 ### Docker Compose
 
-The root compose stack now runs only Open WebUI Slim:
+The root Compose file builds the local Python 3.12 slim image:
 
 ```bash
 docker compose up -d --build
 ```
 
-To use a bind mount instead of the default named volume:
+Use a bind mount instead of the default named volume when desired:
 
 ```bash
 OPEN_WEBUI_DATA_SOURCE=./open-webui-data docker compose up -d --build
 ```
 
-### Required Configuration
+### External inference and vector storage
 
-Since local ML is removed, you must configure external providers:
+Configure an external chat provider and, before using RAG, an external embedding provider and vector database. Remote Chroma is the default-compatible option:
 
 ```bash
-# RAG Embedding (required for RAG features)
-RAG_EMBEDDING_ENGINE=openai        # or "azure_openai"
+OPENAI_API_KEY=your_key
+RAG_EMBEDDING_ENGINE=openai
+RAG_EMBEDDING_MODEL=text-embedding-3-small
 
-# Speech-to-Text (optional)
-AUDIO_STT_ENGINE=openai            # or "deepgram", "azure", "mistral"
-
-# Text-to-Speech (optional)
-AUDIO_TTS_ENGINE=openai            # or "elevenlabs", "azure"
+VECTOR_DB=chroma
+CHROMA_HTTP_HOST=chroma.example.com
+CHROMA_HTTP_PORT=8000
+CHROMA_HTTP_SSL=true
 ```
 
-## Branch Strategy
+Other retained vector backends can be selected with `VECTOR_DB`; see [.env.example](./.env.example) and upstream configuration documentation for provider-specific settings. Speech features remain off until an external `AUDIO_STT_ENGINE` or `AUDIO_TTS_ENGINE` is configured.
 
-- `main` — stable slim releases
-- `slim` — active development branch (based on upstream v0.8.12)
+## Development and Releases
 
-## CI/CD
+- `main` contains stable slim releases.
+- `slim` is the active development branch.
+- The image uses `python:3.12-slim-bookworm` and has no CUDA or bundled-model variant.
+- [`.github/workflows/docker.yaml`](./.github/workflows/docker.yaml) publishes one amd64/arm64 slim image for `main`, `slim`, and version tags.
 
-The `.github/workflows/docker-build-slim.yaml` workflow builds and pushes multi-arch Docker images (linux/amd64 + linux/arm64) to GHCR on every push to `slim` or `slim/**` branches.
+No current v0.10.2 image-size comparison is published yet; the table will be updated after reproducible upstream and slim images are measured with the same build settings.
 
-Image tags follow the branch name: `ghcr.io/OWNER/open-webui-slim:slim`
+## Upstream and License
 
-## Upstream
+This fork tracks [open-webui/open-webui](https://github.com/open-webui/open-webui). See [the upstream documentation](https://docs.openwebui.com/) for general usage guidance, with the removals above taking precedence.
 
-This fork tracks [open-webui/open-webui](https://github.com/open-webui/open-webui). See upstream for full documentation at [docs.openwebui.com](https://docs.openwebui.com/).
-
-## License
-
-Same license as upstream. See [LICENSE](./LICENSE) and [LICENSE_HISTORY](./LICENSE_HISTORY).
+The license is unchanged from upstream. See [LICENSE](./LICENSE) and [LICENSE_HISTORY](./LICENSE_HISTORY).

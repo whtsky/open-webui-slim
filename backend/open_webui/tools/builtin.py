@@ -6,43 +6,70 @@ These tools are automatically available when native function calling is enabled.
 IMPORTANT: DO NOT IMPORT THIS MODULE DIRECTLY IN OTHER PARTS OF THE CODEBASE.
 """
 
+from open_webui.tools.knowledge_fs import kb_exec  # noqa: F401 — re-exported
+
 import json
 import logging
 import time
-import asyncio
 from typing import Optional
 
 from fastapi import Request
 
-from open_webui.models.users import UserModel
-from open_webui.routers.retrieval import search_web as _search_web
-from open_webui.retrieval.utils import get_content_from_url
-from open_webui.routers.images import (
-    image_generations,
-    image_edits,
-    CreateImageForm,
-    EditImageForm,
-)
-from open_webui.routers.memories import (
-    query_memory,
-    add_memory as _add_memory,
-    update_memory_by_id,
-    QueryMemoryForm,
-    AddMemoryForm,
-    MemoryUpdateModel,
-)
-from open_webui.models.notes import Notes
 from open_webui.models.chats import Chats
-from open_webui.models.channels import Channels, ChannelMember, Channel
-from open_webui.models.messages import Messages, Message
+from open_webui.models.config import Config
 from open_webui.models.groups import Groups
 from open_webui.models.memories import Memories
+from open_webui.models.users import UserModel
+from open_webui.retrieval.utils import get_content_from_url
 from open_webui.retrieval.vector.async_client import ASYNC_VECTOR_DB_CLIENT
-from open_webui.utils.sanitize import sanitize_code
+from open_webui.routers.images import (
+    CreateImageForm,
+    EditImageForm,
+    image_edits,
+    image_generations,
+)
+from open_webui.routers.memories import (
+    AddMemoryForm,
+    ListMemoryPathsForm,
+    MemoryUpdateModel,
+    ReadMemoryPathForm,
+    SearchMemoriesForm,
+    UpdateMemoriesForm,
+    list_memory_paths as _list_memory_paths,
+    read_memory_path as _read_memory_path,
+    search_memories as _search_memories,
+    update_memories as _update_memories,
+    update_memory_by_id,
+)
+from open_webui.routers.memories import (
+    add_memory as _add_memory,
+)
+from open_webui.routers.retrieval import search_web as _search_web
 
 log = logging.getLogger(__name__)
 
 MAX_KNOWLEDGE_BASE_SEARCH_ITEMS = 10_000
+
+
+async def _has_read_access_to_file(
+    file,
+    user_id: str,
+    user_role: str,
+    model_knowledge: Optional[list[dict]] = None,
+) -> bool:
+    """Check if a user can read a file via ownership, admin role, model attachment, or access grants."""
+    if file.user_id == user_id or user_role == 'admin':
+        return True
+    if model_knowledge and any(item.get('type') == 'file' and item.get('id') == file.id for item in model_knowledge):
+        return True
+    from open_webui.utils.access_control.files import has_access_to_file
+
+    return await has_access_to_file(
+        file_id=file.id,
+        access_type='read',
+        user=UserModel(**{'id': user_id, 'role': user_role}),
+    )
+
 
 # =============================================================================
 # TIME UTILITIES
@@ -106,6 +133,7 @@ async def calculate_timestamp(
     """
     try:
         import datetime
+
         from dateutil.relativedelta import relativedelta
 
         now = datetime.datetime.now(datetime.timezone.utc)
@@ -199,14 +227,14 @@ async def search_web(
         return json.dumps({'error': 'Request context not available'})
 
     try:
-        engine = __request__.app.state.config.WEB_SEARCH_ENGINE
+        engine = await Config.get('web.search.engine')
         user = UserModel(**__user__) if __user__ else None
 
-        configured = __request__.app.state.config.WEB_SEARCH_RESULT_COUNT
+        configured = await Config.get('web.search.result_count')
         max_count = 5 if configured is None else configured
         count = max(1, min(count, max_count)) if count is not None else max_count
 
-        results = await asyncio.to_thread(_search_web, __request__, engine, query, user)
+        results = await _search_web(__request__, engine, query, user)
 
         # Limit results
         results = results[:count] if results else []
@@ -235,12 +263,12 @@ async def fetch_url(
         return json.dumps({'error': 'Request context not available'})
 
     try:
-        content, _ = await asyncio.to_thread(get_content_from_url, __request__, url)
+        content, _ = await get_content_from_url(__request__, url)
 
         # Truncate if configured (WEB_FETCH_MAX_CONTENT_LENGTH)
         # Guard: content may be None if the web loader silently failed
         if content is not None:
-            max_length = getattr(__request__.app.state.config, 'WEB_FETCH_MAX_CONTENT_LENGTH', None)
+            max_length = await Config.get('web.fetch.max_content_length')
             if max_length and max_length > 0 and len(content) > max_length:
                 content = content[:max_length] + '\n\n[Content truncated...]'
         else:
@@ -248,7 +276,7 @@ async def fetch_url(
 
         return content
     except Exception as e:
-        log.exception(f'fetch_url error: {e}')
+        log.warning(f'fetch_url error: {e}')
         return json.dumps({'error': str(e)})
 
 
@@ -332,10 +360,11 @@ async def edit_image(
     __message_id__: str = None,
 ) -> str:
     """
-    Edit existing images based on a text prompt.
+    Transform one or more existing images according to a text prompt.
+    Supports targeted edits such as adding, removing, replacing, inpainting, extending, or compositing image content.
 
-    :param prompt: A description of the changes to make to the images
-    :param image_urls: A list of URLs of the images to edit
+    :param prompt: A description of the transformation to apply to the provided images
+    :param image_urls: Source image URLs to modify or use as composition inputs
     :return: Confirmation that the images were edited, or an error message
     """
     if __request__ is None:
@@ -390,188 +419,92 @@ async def edit_image(
 
 
 # =============================================================================
-# CODE INTERPRETER TOOLS
-# =============================================================================
-
-
-async def execute_code(
-    code: str,
-    __request__: Request = None,
-    __user__: dict = None,
-    __event_emitter__: callable = None,
-    __event_call__: callable = None,
-    __chat_id__: str = None,
-    __message_id__: str = None,
-    __metadata__: dict = None,
-) -> str:
-    """
-    Execute Python code in a sandboxed environment and return the output.
-    Use this to perform calculations, data analysis, generate visualizations,
-    or run any Python code that would help answer the user's question.
-
-    :param code: The Python code to execute
-    :return: JSON with stdout, stderr, and result from execution
-    """
-    from uuid import uuid4
-
-    if __request__ is None:
-        return json.dumps({'error': 'Request context not available'})
-
-    try:
-        # Sanitize code (strips ANSI codes and markdown fences)
-        code = sanitize_code(code)
-
-        # Import blocked modules from config (same as middleware)
-        from open_webui.config import CODE_INTERPRETER_BLOCKED_MODULES
-
-        # Add import blocking code if there are blocked modules
-        if CODE_INTERPRETER_BLOCKED_MODULES:
-            import textwrap
-
-            blocking_code = textwrap.dedent(
-                f"""
-                import builtins
-
-                BLOCKED_MODULES = {CODE_INTERPRETER_BLOCKED_MODULES}
-
-                _real_import = builtins.__import__
-                def restricted_import(name, globals=None, locals=None, fromlist=(), level=0):
-                    if name.split('.')[0] in BLOCKED_MODULES:
-                        importer_name = globals.get('__name__') if globals else None
-                        if importer_name == '__main__':
-                            raise ImportError(
-                                f"Direct import of module {{name}} is restricted."
-                            )
-                    return _real_import(name, globals, locals, fromlist, level)
-
-                builtins.__import__ = restricted_import
-                """
-            )
-            code = blocking_code + '\n' + code
-
-        engine = getattr(__request__.app.state.config, 'CODE_INTERPRETER_ENGINE', 'pyodide')
-        if engine == 'pyodide':
-            # Execute via frontend pyodide using bidirectional event call
-            if __event_call__ is None:
-                return json.dumps(
-                    {'error': 'Event call not available. WebSocket connection required for pyodide execution.'}
-                )
-
-            output = await __event_call__(
-                {
-                    'type': 'execute:python',
-                    'data': {
-                        'id': str(uuid4()),
-                        'code': code,
-                        'session_id': (__metadata__.get('session_id') if __metadata__ else None),
-                        'files': (__metadata__.get('files', []) if __metadata__ else []),
-                    },
-                }
-            )
-
-            # Parse the output - pyodide returns dict with stdout, stderr, result
-            if isinstance(output, dict):
-                stdout = output.get('stdout', '')
-                stderr = output.get('stderr', '')
-                result = output.get('result', '')
-            else:
-                stdout = ''
-                stderr = ''
-                result = str(output) if output else ''
-
-        elif engine == 'jupyter':
-            from open_webui.utils.code_interpreter import execute_code_jupyter
-
-            output = await execute_code_jupyter(
-                __request__.app.state.config.CODE_INTERPRETER_JUPYTER_URL,
-                code,
-                (
-                    __request__.app.state.config.CODE_INTERPRETER_JUPYTER_AUTH_TOKEN
-                    if __request__.app.state.config.CODE_INTERPRETER_JUPYTER_AUTH == 'token'
-                    else None
-                ),
-                (
-                    __request__.app.state.config.CODE_INTERPRETER_JUPYTER_AUTH_PASSWORD
-                    if __request__.app.state.config.CODE_INTERPRETER_JUPYTER_AUTH == 'password'
-                    else None
-                ),
-                __request__.app.state.config.CODE_INTERPRETER_JUPYTER_TIMEOUT,
-            )
-
-            stdout = output.get('stdout', '')
-            stderr = output.get('stderr', '')
-            result = output.get('result', '')
-
-        else:
-            return json.dumps({'error': f'Unknown code interpreter engine: {engine}'})
-
-        # Handle image outputs (base64 encoded) - replace with uploaded URLs
-        # Get actual user object for image upload (upload_image requires user.id attribute)
-        if __user__ and __user__.get('id'):
-            from open_webui.models.users import Users
-            from open_webui.utils.files import get_image_url_from_base64
-
-            user = await Users.get_user_by_id(__user__['id'])
-
-            # Extract and upload images from stdout
-            if stdout and isinstance(stdout, str):
-                stdout_lines = stdout.split('\n')
-                for idx, line in enumerate(stdout_lines):
-                    if 'data:image/png;base64' in line:
-                        image_url = await get_image_url_from_base64(
-                            __request__,
-                            line,
-                            __metadata__ or {},
-                            user,
-                        )
-                        if image_url:
-                            stdout_lines[idx] = f'![Output Image]({image_url})'
-                stdout = '\n'.join(stdout_lines)
-
-            # Extract and upload images from result
-            if result and isinstance(result, str):
-                result_lines = result.split('\n')
-                for idx, line in enumerate(result_lines):
-                    if 'data:image/png;base64' in line:
-                        image_url = await get_image_url_from_base64(
-                            __request__,
-                            line,
-                            __metadata__ or {},
-                            user,
-                        )
-                        if image_url:
-                            result_lines[idx] = f'![Output Image]({image_url})'
-                result = '\n'.join(result_lines)
-
-        response = {
-            'status': 'success',
-            'stdout': stdout,
-            'stderr': stderr,
-            'result': result,
-        }
-
-        return json.dumps(response, ensure_ascii=False)
-    except Exception as e:
-        log.exception(f'execute_code error: {e}')
-        return json.dumps({'error': str(e)})
-
-
-# =============================================================================
 # MEMORY TOOLS
 # =============================================================================
 
 
-async def search_memories(
-    query: str,
-    count: int = 5,
+async def list_memory_paths(
+    query: str = '',
+    count: int = 100,
+    type: str = 'all',
     __request__: Request = None,
     __user__: dict = None,
 ) -> str:
     """
-    Search the user's stored memories for relevant information.
+    List saved memory paths to find existing memory groups before writing or moving memories.
 
-    :param query: The search query to find relevant memories
+    :param query: Optional query to filter memory paths or contents
+    :param count: Maximum number of paths to return
+    :param type: "user", "context", or "all"
+    :return: JSON with memory paths, counts, children, and update times
+    """
+    try:
+        user = UserModel(**__user__) if __user__ else None
+        result = await _list_memory_paths(
+            ListMemoryPathsForm(
+                query=query or None,
+                type=type if type in {'user', 'context', 'all'} else 'all',
+                limit=count,
+            ),
+            user,
+        )
+        return json.dumps(result, ensure_ascii=False)
+    except Exception as e:
+        log.exception(f'list_memory_paths error: {e}')
+        return json.dumps({'error': str(e)})
+
+
+async def read_memory_path(
+    path: str,
+    count: int = 50,
+    type: str = 'all',
+    include_children: bool = True,
+    __request__: Request = None,
+    __user__: dict = None,
+) -> str:
+    """
+    Read saved memories at a memory path, including nearby parent and child paths.
+
+    :param path: Memory path to read
+    :param count: Maximum number of memories to return
+    :param type: "user", "context", or "all"
+    :param include_children: Include memories under child paths
+    :return: JSON with parent paths, child paths, and memories at the path
+    """
+    try:
+        user = UserModel(**__user__) if __user__ else None
+        result = await _read_memory_path(
+            ReadMemoryPathForm(
+                path=path,
+                type=type if type in {'user', 'context', 'all'} else 'all',
+                include_children=include_children,
+                limit=count,
+            ),
+            user,
+        )
+        return json.dumps(result, ensure_ascii=False)
+    except Exception as e:
+        log.exception(f'read_memory_path error: {e}')
+        return json.dumps({'error': str(e)})
+
+
+async def search_memories(
+    query: str = '',
+    count: int = 5,
+    type: str = 'all',
+    path: Optional[str] = None,
+    memory_id: Optional[str] = None,
+    __request__: Request = None,
+    __user__: dict = None,
+) -> str:
+    """
+    Search or browse saved memories by content, path, type, or memory ID.
+
+    :param query: Optional query to search memory content and path
     :param count: Number of memories to return (default 5)
+    :param type: "user", "context", or "all"
+    :param path: Optional memory path to search around
+    :param memory_id: Optional exact memory ID to read
     :return: JSON with matching memories and their dates
     """
     if __request__ is None:
@@ -580,28 +513,34 @@ async def search_memories(
     try:
         user = UserModel(**__user__) if __user__ else None
 
-        results = await query_memory(
-            __request__,
-            QueryMemoryForm(content=query, k=count),
+        memories = await _search_memories(
+            SearchMemoriesForm(
+                query=query or None,
+                type=type if type in {'user', 'context', 'all'} else 'all',
+                path=path,
+                memory_id=memory_id,
+                limit=count,
+            ),
             user,
         )
 
-        if results and hasattr(results, 'documents') and results.documents:
-            memories = []
-            for doc_idx, doc in enumerate(results.documents[0]):
-                memory_id = None
-                if results.ids and results.ids[0]:
-                    memory_id = results.ids[0][doc_idx]
-                created_at = 'Unknown'
-                if results.metadatas and results.metadatas[0][doc_idx].get('created_at'):
-                    created_at = time.strftime(
-                        '%Y-%m-%d',
-                        time.localtime(results.metadatas[0][doc_idx]['created_at']),
-                    )
-                memories.append({'id': memory_id, 'date': created_at, 'content': doc})
-            return json.dumps(memories, ensure_ascii=False)
-        else:
+        if not memories:
             return json.dumps([])
+
+        return json.dumps(
+            [
+                {
+                    'id': memory.id,
+                    'type': memory.type,
+                    'path': memory.path,
+                    'content': memory.content,
+                    'created_at': time.strftime('%Y-%m-%d', time.localtime(memory.created_at)),
+                    'updated_at': time.strftime('%Y-%m-%d', time.localtime(memory.updated_at)),
+                }
+                for memory in memories
+            ],
+            ensure_ascii=False,
+        )
     except Exception as e:
         log.exception(f'search_memories error: {e}')
         return json.dumps({'error': str(e)})
@@ -609,13 +548,21 @@ async def search_memories(
 
 async def add_memory(
     content: str,
+    type: str = 'user',
+    path: Optional[str] = None,
     __request__: Request = None,
     __user__: dict = None,
 ) -> str:
     """
-    Store a new memory for the user.
+    Save enduring information that can improve future chats.
+
+    Save stable preferences, goals, projects, relationships, habits, and standing instructions.
+    Do not save one-off activity, meals, routine daily events, temporary mood, or other short-lived details
+    unless the user explicitly asks you to remember them.
 
     :param content: The memory content to store
+    :param type: Use "user" for facts/preferences about the user, or "context" for other durable context
+    :param path: Optional stable memory address for grouping related memories
     :return: Confirmation that the memory was stored
     """
     if __request__ is None:
@@ -626,27 +573,75 @@ async def add_memory(
 
         memory = await _add_memory(
             __request__,
-            AddMemoryForm(content=content),
+            AddMemoryForm(content=content, type=Memories.normalize_memory_type(type), path=path),
             user,
         )
 
-        return json.dumps({'status': 'success', 'id': memory.id}, ensure_ascii=False)
+        return json.dumps(
+            {'status': 'success', 'id': memory.id, 'type': memory.type, 'path': memory.path},
+            ensure_ascii=False,
+        )
     except Exception as e:
         log.exception(f'add_memory error: {e}')
+        return json.dumps({'error': str(e)})
+
+
+async def update_memory(
+    operations: list[dict],
+    __request__: Request = None,
+    __user__: dict = None,
+) -> str:
+    """
+    Apply a batch of memory changes after learning enduring information.
+
+    Use type "user" for facts, preferences, or instructions about the user.
+    Use type "context" for other durable context that may help future chats.
+    Do not save one-off activity, meals, routine daily events, temporary mood, or other short-lived details
+    unless the user explicitly asks you to remember them.
+    Path is optional. Use it as a stable memory address to group related memories.
+    Prefer an existing path from list_memory_paths when one fits.
+    Leave path empty when no useful grouping is clear.
+
+    Operation shapes:
+    - {"action": "add", "content": "...", "type": "user"|"context", "path": "..."}
+    - {"action": "replace", "id": "...", "content": "...", "type": "user"|"context", "path": "..."}
+    - {"action": "move", "id": "...", "path": "..."}
+    - {"action": "remove", "id": "..."}
+
+    :param operations: Memory operations to apply in one request
+    :return: JSON with operation results
+    """
+    if __request__ is None:
+        return json.dumps({'error': 'Request context not available'})
+
+    try:
+        user = UserModel(**__user__) if __user__ else None
+        operation_results = await _update_memories(
+            __request__,
+            UpdateMemoriesForm(operations=operations),
+            user,
+        )
+        return json.dumps(operation_results, ensure_ascii=False)
+    except Exception as e:
+        log.exception(f'update_memory error: {e}')
         return json.dumps({'error': str(e)})
 
 
 async def replace_memory_content(
     memory_id: str,
     content: str,
+    type: Optional[str] = None,
+    path: Optional[str] = None,
     __request__: Request = None,
     __user__: dict = None,
 ) -> str:
     """
-    Update the content of an existing memory by its ID.
+    Update an existing saved memory by its ID when its content needs correction.
 
     :param memory_id: The ID of the memory to update
     :param content: The new content for the memory
+    :param type: Optional "user" or "context" type for the updated memory
+    :param path: Optional stable memory address for grouping related memories
     :return: Confirmation that the memory was updated
     """
     if __request__ is None:
@@ -658,12 +653,22 @@ async def replace_memory_content(
         memory = await update_memory_by_id(
             memory_id=memory_id,
             request=__request__,
-            form_data=MemoryUpdateModel(content=content),
+            form_data=MemoryUpdateModel(
+                content=content,
+                type=Memories.normalize_memory_type(type) if type else None,
+                path=path,
+            ),
             user=user,
         )
 
         return json.dumps(
-            {'status': 'success', 'id': memory.id, 'content': memory.content},
+            {
+                'status': 'success',
+                'id': memory.id,
+                'type': memory.type,
+                'path': memory.path,
+                'content': memory.content,
+            },
             ensure_ascii=False,
         )
     except Exception as e:
@@ -677,7 +682,7 @@ async def delete_memory(
     __user__: dict = None,
 ) -> str:
     """
-    Delete a memory by its ID.
+    Delete a saved memory by its ID.
 
     :param memory_id: The ID of the memory to delete
     :return: Confirmation that the memory was deleted
@@ -708,7 +713,7 @@ async def list_memories(
     __user__: dict = None,
 ) -> str:
     """
-    List all stored memories for the user.
+    List all stored memories for the user, including IDs and timestamps.
 
     :return: JSON list of all memories with id, content, and dates
     """
@@ -721,298 +726,22 @@ async def list_memories(
         memories = await Memories.get_memories_by_user_id(user.id)
 
         if memories:
-            result = [
+            memory_rows = [
                 {
                     'id': m.id,
+                    'type': m.type,
+                    'path': m.path,
                     'content': m.content,
                     'created_at': time.strftime('%Y-%m-%d %H:%M', time.localtime(m.created_at)),
                     'updated_at': time.strftime('%Y-%m-%d %H:%M', time.localtime(m.updated_at)),
                 }
                 for m in memories
             ]
-            return json.dumps(result, ensure_ascii=False)
+            return json.dumps(memory_rows, ensure_ascii=False)
         else:
             return json.dumps([])
     except Exception as e:
         log.exception(f'list_memories error: {e}')
-        return json.dumps({'error': str(e)})
-
-
-# =============================================================================
-# NOTES TOOLS
-# =============================================================================
-
-
-async def search_notes(
-    query: str,
-    count: int = 5,
-    start_timestamp: Optional[int] = None,
-    end_timestamp: Optional[int] = None,
-    __request__: Request = None,
-    __user__: dict = None,
-) -> str:
-    """
-    Search the user's notes by title and content.
-
-    :param query: The search query to find matching notes
-    :param count: Maximum number of results to return (default: 5)
-    :param start_timestamp: Only include notes updated after this Unix timestamp (seconds)
-    :param end_timestamp: Only include notes updated before this Unix timestamp (seconds)
-    :return: JSON with matching notes containing id, title, and content snippet
-    """
-    if __request__ is None:
-        return json.dumps({'error': 'Request context not available'})
-
-    if not __user__:
-        return json.dumps({'error': 'User context not available'})
-
-    try:
-        user_id = __user__.get('id')
-        user_group_ids = [group.id for group in await Groups.get_groups_by_member_id(user_id)]
-
-        result = await Notes.search_notes(
-            user_id=user_id,
-            filter={
-                'query': query,
-                'user_id': user_id,
-                'group_ids': user_group_ids,
-                'permission': 'read',
-            },
-            skip=0,
-            limit=count * 3,  # Fetch more for filtering
-        )
-
-        # Convert timestamps to nanoseconds for comparison
-        start_ts = start_timestamp * 1_000_000_000 if start_timestamp else None
-        end_ts = end_timestamp * 1_000_000_000 if end_timestamp else None
-
-        notes = []
-        for note in result.items:
-            # Apply date filters (updated_at is in nanoseconds)
-            if start_ts and note.updated_at < start_ts:
-                continue
-            if end_ts and note.updated_at > end_ts:
-                continue
-
-            # Extract a snippet from the markdown content
-            content_snippet = ''
-            if note.data and note.data.get('content', {}).get('md'):
-                md_content = note.data['content']['md']
-                content_lower = md_content.lower()
-
-                # Find the first matching word to center the snippet around.
-                search_words = query.lower().split()
-                match_pos = -1
-                match_len = len(query)
-                for word in search_words:
-                    found_pos = content_lower.find(word)
-                    if found_pos != -1:
-                        match_pos = found_pos
-                        match_len = len(word)
-                        break
-
-                if match_pos != -1:
-                    snippet_start = max(0, match_pos - 50)
-                    snippet_end = min(len(md_content), match_pos + match_len + 100)
-                    content_snippet = (
-                        ('...' if snippet_start > 0 else '')
-                        + md_content[snippet_start:snippet_end]
-                        + ('...' if snippet_end < len(md_content) else '')
-                    )
-                else:
-                    content_snippet = md_content[:150] + ('...' if len(md_content) > 150 else '')
-
-            notes.append(
-                {
-                    'id': note.id,
-                    'title': note.title,
-                    'snippet': content_snippet,
-                    'updated_at': note.updated_at,
-                }
-            )
-
-            if len(notes) >= count:
-                break
-
-        return json.dumps(notes, ensure_ascii=False)
-    except Exception as e:
-        log.exception(f'search_notes error: {e}')
-        return json.dumps({'error': str(e)})
-
-
-async def view_note(
-    note_id: str,
-    __request__: Request = None,
-    __user__: dict = None,
-) -> str:
-    """
-    Get the full content of a note by its ID.
-
-    :param note_id: The ID of the note to retrieve
-    :return: JSON with the note's id, title, and full markdown content
-    """
-    if __request__ is None:
-        return json.dumps({'error': 'Request context not available'})
-
-    if not __user__:
-        return json.dumps({'error': 'User context not available'})
-
-    try:
-        note = await Notes.get_note_by_id(note_id)
-
-        if not note:
-            return json.dumps({'error': 'Note not found'})
-
-        # Check access permission
-        user_id = __user__.get('id')
-        user_group_ids = [group.id for group in await Groups.get_groups_by_member_id(user_id)]
-
-        from open_webui.models.access_grants import AccessGrants
-
-        if note.user_id != user_id and not await AccessGrants.has_access(
-            user_id=user_id,
-            resource_type='note',
-            resource_id=note.id,
-            permission='read',
-            user_group_ids=set(user_group_ids),
-        ):
-            return json.dumps({'error': 'Access denied'})
-
-        # Extract markdown content
-        content = ''
-        if note.data and note.data.get('content', {}).get('md'):
-            content = note.data['content']['md']
-
-        return json.dumps(
-            {
-                'id': note.id,
-                'title': note.title,
-                'content': content,
-                'updated_at': note.updated_at,
-                'created_at': note.created_at,
-            },
-            ensure_ascii=False,
-        )
-    except Exception as e:
-        log.exception(f'view_note error: {e}')
-        return json.dumps({'error': str(e)})
-
-
-async def write_note(
-    title: str,
-    content: str,
-    __request__: Request = None,
-    __user__: dict = None,
-) -> str:
-    """
-    Create a new note with the given title and content.
-
-    :param title: The title of the new note
-    :param content: The markdown content for the note
-    :return: JSON with success status and new note id
-    """
-    if __request__ is None:
-        return json.dumps({'error': 'Request context not available'})
-
-    if not __user__:
-        return json.dumps({'error': 'User context not available'})
-
-    try:
-        from open_webui.models.notes import NoteForm
-
-        user_id = __user__.get('id')
-
-        form = NoteForm(
-            title=title,
-            data={'content': {'md': content}},
-            access_grants=[],  # Private by default - only owner can access
-        )
-
-        new_note = await Notes.insert_new_note(user_id, form)
-
-        if not new_note:
-            return json.dumps({'error': 'Failed to create note'})
-
-        return json.dumps(
-            {
-                'status': 'success',
-                'id': new_note.id,
-                'title': new_note.title,
-                'created_at': new_note.created_at,
-            },
-            ensure_ascii=False,
-        )
-    except Exception as e:
-        log.exception(f'write_note error: {e}')
-        return json.dumps({'error': str(e)})
-
-
-async def replace_note_content(
-    note_id: str,
-    content: str,
-    title: Optional[str] = None,
-    __request__: Request = None,
-    __user__: dict = None,
-) -> str:
-    """
-    Update the content of a note. Use this to modify task lists, add notes, or update content.
-
-    :param note_id: The ID of the note to update
-    :param content: The new markdown content for the note
-    :param title: Optional new title for the note
-    :return: JSON with success status and updated note info
-    """
-    if __request__ is None:
-        return json.dumps({'error': 'Request context not available'})
-
-    if not __user__:
-        return json.dumps({'error': 'User context not available'})
-
-    try:
-        from open_webui.models.notes import NoteUpdateForm
-
-        note = await Notes.get_note_by_id(note_id)
-
-        if not note:
-            return json.dumps({'error': 'Note not found'})
-
-        # Check write permission
-        user_id = __user__.get('id')
-        user_group_ids = [group.id for group in await Groups.get_groups_by_member_id(user_id)]
-
-        from open_webui.models.access_grants import AccessGrants
-
-        if note.user_id != user_id and not await AccessGrants.has_access(
-            user_id=user_id,
-            resource_type='note',
-            resource_id=note.id,
-            permission='write',
-            user_group_ids=set(user_group_ids),
-        ):
-            return json.dumps({'error': 'Write access denied'})
-
-        # Build update form
-        update_data = {'data': {'content': {'md': content}}}
-        if title:
-            update_data['title'] = title
-
-        form = NoteUpdateForm(**update_data)
-        updated_note = await Notes.update_note_by_id(note_id, form)
-
-        if not updated_note:
-            return json.dumps({'error': 'Failed to update note'})
-
-        return json.dumps(
-            {
-                'status': 'success',
-                'id': updated_note.id,
-                'title': updated_note.title,
-                'updated_at': updated_note.updated_at,
-            },
-            ensure_ascii=False,
-        )
-    except Exception as e:
-        log.exception(f'replace_note_content error: {e}')
         return json.dumps({'error': str(e)})
 
 
@@ -1032,6 +761,7 @@ async def search_chats(
 ) -> str:
     """
     Search the user's previous chat conversations by title and message content.
+    Helpful for finding details from earlier conversations.
 
     :param query: The search query to find matching chats
     :param count: Maximum number of results to return (default: 5)
@@ -1070,7 +800,7 @@ async def search_chats(
 
             # Find a matching message snippet
             snippet = ''
-            messages = chat.chat.get('history', {}).get('messages', {})
+            messages = (getattr(chat, 'chat', None) or {}).get('history', {}).get('messages', {})
             lower_query = query.lower()
 
             for msg_id, msg in messages.items():
@@ -1109,7 +839,8 @@ async def view_chat(
     __user__: dict = None,
 ) -> str:
     """
-    Get the full conversation history of a chat by its ID.
+    Get the full conversation history of a chat by its ID after a relevant
+    previous chat has been identified.
 
     :param chat_id: The ID of the chat to retrieve
     :return: JSON with the chat's id, title, and messages
@@ -1168,288 +899,6 @@ async def view_chat(
 
 
 # =============================================================================
-# CHANNELS TOOLS
-# =============================================================================
-
-
-async def search_channels(
-    query: str,
-    count: int = 5,
-    __request__: Request = None,
-    __user__: dict = None,
-) -> str:
-    """
-    Search for channels by name and description that the user has access to.
-
-    :param query: The search query to find matching channels
-    :param count: Maximum number of results to return (default: 5)
-    :return: JSON with matching channels containing id, name, description, and type
-    """
-    if __request__ is None:
-        return json.dumps({'error': 'Request context not available'})
-
-    if not __user__:
-        return json.dumps({'error': 'User context not available'})
-
-    try:
-        user_id = __user__.get('id')
-
-        # Get all channels the user has access to
-        all_channels = await Channels.get_channels_by_user_id(user_id)
-
-        # Filter by query
-        lower_query = query.lower()
-        matching_channels = []
-
-        for channel in all_channels:
-            name_match = lower_query in channel.name.lower() if channel.name else False
-            desc_match = lower_query in (channel.description or '').lower()
-
-            if name_match or desc_match:
-                matching_channels.append(
-                    {
-                        'id': channel.id,
-                        'name': channel.name,
-                        'description': channel.description or '',
-                        'type': channel.type or 'public',
-                    }
-                )
-
-            if len(matching_channels) >= count:
-                break
-
-        return json.dumps(matching_channels, ensure_ascii=False)
-    except Exception as e:
-        log.exception(f'search_channels error: {e}')
-        return json.dumps({'error': str(e)})
-
-
-async def search_channel_messages(
-    query: str,
-    count: int = 10,
-    start_timestamp: Optional[int] = None,
-    end_timestamp: Optional[int] = None,
-    __request__: Request = None,
-    __user__: dict = None,
-) -> str:
-    """
-    Search for messages in channels the user is a member of, including thread replies.
-
-    :param query: The search query to find matching messages
-    :param count: Maximum number of results to return (default: 10)
-    :param start_timestamp: Only include messages created after this Unix timestamp (seconds)
-    :param end_timestamp: Only include messages created before this Unix timestamp (seconds)
-    :return: JSON with matching messages containing channel info, message content, and thread context
-    """
-    if __request__ is None:
-        return json.dumps({'error': 'Request context not available'})
-
-    if not __user__:
-        return json.dumps({'error': 'User context not available'})
-
-    try:
-        user_id = __user__.get('id')
-
-        # Get all channels the user has access to
-        user_channels = await Channels.get_channels_by_user_id(user_id)
-        channel_ids = [c.id for c in user_channels]
-        channel_map = {c.id: c for c in user_channels}
-
-        if not channel_ids:
-            return json.dumps([])
-
-        # Convert timestamps to nanoseconds (Message.created_at is in nanoseconds)
-        start_ts = start_timestamp * 1_000_000_000 if start_timestamp else None
-        end_ts = end_timestamp * 1_000_000_000 if end_timestamp else None
-
-        # Search messages using the model method
-        matching_messages = await Messages.search_messages_by_channel_ids(
-            channel_ids=channel_ids,
-            query=query,
-            start_timestamp=start_ts,
-            end_timestamp=end_ts,
-            limit=count,
-        )
-
-        results = []
-        for msg in matching_messages:
-            channel = channel_map.get(msg.channel_id)
-
-            # Extract snippet around the match
-            content = msg.content or ''
-            lower_query = query.lower()
-            idx = content.lower().find(lower_query)
-            if idx != -1:
-                start = max(0, idx - 50)
-                end = min(len(content), idx + len(query) + 100)
-                snippet = ('...' if start > 0 else '') + content[start:end] + ('...' if end < len(content) else '')
-            else:
-                snippet = content[:150] + ('...' if len(content) > 150 else '')
-
-            results.append(
-                {
-                    'channel_id': msg.channel_id,
-                    'channel_name': channel.name if channel else 'Unknown',
-                    'message_id': msg.id,
-                    'content_snippet': snippet,
-                    'is_thread_reply': msg.parent_id is not None,
-                    'parent_id': msg.parent_id,
-                    'created_at': msg.created_at,
-                }
-            )
-
-        return json.dumps(results, ensure_ascii=False)
-    except Exception as e:
-        log.exception(f'search_channel_messages error: {e}')
-        return json.dumps({'error': str(e)})
-
-
-async def view_channel_message(
-    message_id: str,
-    __request__: Request = None,
-    __user__: dict = None,
-) -> str:
-    """
-    Get the full content of a channel message by its ID, including thread replies.
-
-    :param message_id: The ID of the message to retrieve
-    :return: JSON with the message content, channel info, and thread replies if any
-    """
-    if __request__ is None:
-        return json.dumps({'error': 'Request context not available'})
-
-    if not __user__:
-        return json.dumps({'error': 'User context not available'})
-
-    try:
-        user_id = __user__.get('id')
-
-        message = await Messages.get_message_by_id(message_id)
-
-        if not message:
-            return json.dumps({'error': 'Message not found'})
-
-        # Verify user has access to the channel
-        channel = await Channels.get_channel_by_id(message.channel_id)
-        if not channel:
-            return json.dumps({'error': 'Channel not found'})
-
-        # Check if user has access to the channel
-        user_channels = await Channels.get_channels_by_user_id(user_id)
-        channel_ids = [c.id for c in user_channels]
-
-        if message.channel_id not in channel_ids:
-            return json.dumps({'error': 'Access denied'})
-
-        # Build response with thread information
-        result = {
-            'id': message.id,
-            'channel_id': message.channel_id,
-            'channel_name': channel.name,
-            'content': message.content,
-            'user_id': message.user_id,
-            'is_thread_reply': message.parent_id is not None,
-            'parent_id': message.parent_id,
-            'reply_count': message.reply_count,
-            'created_at': message.created_at,
-            'updated_at': message.updated_at,
-        }
-
-        # Include user info if available
-        if message.user:
-            result['user_name'] = message.user.name
-
-        return json.dumps(result, ensure_ascii=False)
-    except Exception as e:
-        log.exception(f'view_channel_message error: {e}')
-        return json.dumps({'error': str(e)})
-
-
-async def view_channel_thread(
-    parent_message_id: str,
-    __request__: Request = None,
-    __user__: dict = None,
-) -> str:
-    """
-    Get all messages in a channel thread, including the parent message and all replies.
-
-    :param parent_message_id: The ID of the parent message that started the thread
-    :return: JSON with the parent message and all thread replies in chronological order
-    """
-    if __request__ is None:
-        return json.dumps({'error': 'Request context not available'})
-
-    if not __user__:
-        return json.dumps({'error': 'User context not available'})
-
-    try:
-        user_id = __user__.get('id')
-
-        # Get the parent message
-        parent_message = await Messages.get_message_by_id(parent_message_id)
-
-        if not parent_message:
-            return json.dumps({'error': 'Message not found'})
-
-        # Verify user has access to the channel
-        channel = await Channels.get_channel_by_id(parent_message.channel_id)
-        if not channel:
-            return json.dumps({'error': 'Channel not found'})
-
-        user_channels = await Channels.get_channels_by_user_id(user_id)
-        channel_ids = [c.id for c in user_channels]
-
-        if parent_message.channel_id not in channel_ids:
-            return json.dumps({'error': 'Access denied'})
-
-        # Get all thread replies
-        thread_replies = await Messages.get_thread_replies_by_message_id(parent_message_id)
-
-        # Build the response
-        messages = []
-
-        # Add parent message first
-        messages.append(
-            {
-                'id': parent_message.id,
-                'content': parent_message.content,
-                'user_id': parent_message.user_id,
-                'user_name': parent_message.user.name if parent_message.user else None,
-                'is_parent': True,
-                'created_at': parent_message.created_at,
-            }
-        )
-
-        # Add thread replies (reverse to get chronological order)
-        for reply in reversed(thread_replies):
-            messages.append(
-                {
-                    'id': reply.id,
-                    'content': reply.content,
-                    'user_id': reply.user_id,
-                    'user_name': reply.user.name if reply.user else None,
-                    'is_parent': False,
-                    'reply_to_id': reply.reply_to_id,
-                    'created_at': reply.created_at,
-                }
-            )
-
-        return json.dumps(
-            {
-                'channel_id': parent_message.channel_id,
-                'channel_name': channel.name,
-                'thread_id': parent_message_id,
-                'message_count': len(messages),
-                'messages': messages,
-            },
-            ensure_ascii=False,
-        )
-    except Exception as e:
-        log.exception(f'view_channel_thread error: {e}')
-        return json.dumps({'error': str(e)})
-
-
-# =============================================================================
 # KNOWLEDGE BASE TOOLS
 # =============================================================================
 
@@ -1461,7 +910,8 @@ async def list_knowledge_bases(
     __user__: dict = None,
 ) -> str:
     """
-    List the user's accessible knowledge bases.
+    List the user's accessible knowledge bases so a relevant internal source
+    can be chosen.
 
     :param count: Maximum number of KBs to return (default: 10)
     :param skip: Number of results to skip for pagination (default: 0)
@@ -1519,7 +969,8 @@ async def search_knowledge_bases(
     __user__: dict = None,
 ) -> str:
     """
-    Search the user's accessible knowledge bases by name and description.
+    Search the user's accessible knowledge bases by name and description to find
+    a relevant internal source.
 
     :param query: The search query to find matching knowledge bases
     :param count: Maximum number of results to return (default: 5)
@@ -1582,6 +1033,7 @@ async def search_knowledge_files(
     """
     Search files by filename across knowledge bases the user has access to.
     When the model has attached knowledge, searches only within attached KBs and files.
+    Helpful when looking for a specific document or file name.
 
     :param query: The search query to find matching files by filename
     :param knowledge_id: Optional KB id to limit search to a specific knowledge base
@@ -1596,9 +1048,9 @@ async def search_knowledge_files(
         return json.dumps({'error': 'User context not available'})
 
     try:
-        from open_webui.models.knowledge import Knowledges
-        from open_webui.models.files import Files
         from open_webui.models.access_grants import AccessGrants
+        from open_webui.models.files import Files
+        from open_webui.models.knowledge import Knowledges
 
         user_id = __user__.get('id')
         user_role = __user__.get('role', 'user')
@@ -1683,6 +1135,21 @@ async def search_knowledge_files(
 
         # No attached knowledge - search all accessible KBs
         if knowledge_id:
+            # search_files_by_id does not enforce knowledge_id ownership; mirror the attached-KB check above.
+            knowledge = await Knowledges.get_knowledge_by_id(knowledge_id)
+            if not knowledge or not (
+                user_role == 'admin'
+                or knowledge.user_id == user_id
+                or await AccessGrants.has_access(
+                    user_id=user_id,
+                    resource_type='knowledge',
+                    resource_id=knowledge.id,
+                    permission='read',
+                    user_group_ids=set(user_group_ids),
+                )
+            ):
+                return json.dumps({'error': f'Access denied to knowledge base {knowledge_id}'})
+
             result = await Knowledges.search_files_by_id(
                 knowledge_id=knowledge_id,
                 user_id=user_id,
@@ -1722,12 +1189,177 @@ async def search_knowledge_files(
 # Hard cap for view_file / view_knowledge_file output
 MAX_VIEW_FILE_CHARS = 100_000
 DEFAULT_VIEW_FILE_MAX_CHARS = 10_000
+MAX_GREP_RESULTS = 50
+
+
+async def grep_knowledge_files(
+    pattern: str,
+    file_id: Optional[str] = None,
+    case_insensitive: bool = False,
+    count_only: bool = False,
+    __request__: Request = None,
+    __user__: dict = None,
+    __model_knowledge__: Optional[list[dict]] = None,
+) -> str:
+    """
+    Search for exact text across knowledge files. Returns matching lines with line numbers.
+    Unlike query_knowledge_files (semantic/vector search), this performs exact string matching.
+    Automatically detects regex patterns (e.g. "error|warn", "version \\d+").
+    Helpful for literal strings, identifiers, error messages, or regex-style searches.
+
+    :param pattern: The text pattern to search for (regex auto-detected)
+    :param file_id: Optional file ID to search within a single file only
+    :param case_insensitive: If true, ignore case when matching (default: false)
+    :param count_only: If true, return only match counts per file (default: false)
+    :return: Matching lines with file IDs, filenames, and line numbers
+    """
+    if __request__ is None:
+        return json.dumps({'error': 'Request context not available'})
+
+    if not __user__:
+        return json.dumps({'error': 'User context not available'})
+
+    if not pattern or not pattern.strip():
+        return json.dumps({'error': 'Pattern is required'})
+
+    try:
+        from open_webui.models.files import Files
+        from open_webui.models.knowledge import Knowledges
+        from open_webui.tools.knowledge_fs import build_matcher
+
+        user_id = __user__.get('id')
+        user_role = __user__.get('role', 'user')
+        user_group_ids = [group.id for group in await Groups.get_groups_by_member_id(user_id)]
+
+        _matches, err = build_matcher(pattern, case_insensitive)
+        if err:
+            return json.dumps({'error': err})
+
+        # Collect files to search
+        files_to_search = []
+
+        if file_id:
+            # Single file mode — verify access
+            file = await Files.get_file_by_id(file_id)
+            if file:
+                if not await _has_read_access_to_file(file, user_id, user_role, __model_knowledge__):
+                    return json.dumps({'error': 'File not found'})
+                files_to_search.append(file)
+        elif __model_knowledge__:
+            # Scoped to model's attached knowledge
+            from open_webui.models.access_grants import AccessGrants
+
+            seen_ids = set()
+            for item in __model_knowledge__:
+                item_type = item.get('type')
+                item_id = item.get('id')
+                if item_type == 'file' and item_id not in seen_ids:
+                    file = await Files.get_file_by_id(item_id)
+                    if file:
+                        files_to_search.append(file)
+                        seen_ids.add(item_id)
+                elif item_type == 'collection':
+                    knowledge = await Knowledges.get_knowledge_by_id(item_id)
+                    if not knowledge:
+                        continue
+                    # Verify user can access this KB
+                    if not (
+                        user_role == 'admin'
+                        or knowledge.user_id == user_id
+                        or await AccessGrants.has_access(
+                            user_id=user_id,
+                            resource_type='knowledge',
+                            resource_id=knowledge.id,
+                            permission='read',
+                            user_group_ids=set(user_group_ids),
+                        )
+                    ):
+                        continue
+                    kb_files = await Knowledges.get_files_by_id(item_id)
+                    if kb_files:
+                        for f in kb_files:
+                            if f.id not in seen_ids:
+                                files_to_search.append(f)
+                                seen_ids.add(f.id)
+        else:
+            # All accessible knowledge bases — use the same search pattern as list_knowledge_bases
+            result = await Knowledges.search_knowledge_bases(
+                user_id,
+                filter={
+                    'query': '',
+                    'user_id': user_id,
+                    'group_ids': user_group_ids,
+                },
+                skip=0,
+                limit=200,
+            )
+            seen_ids = set()
+            for kb in result.items:
+                file_ids = []
+                # Get files attached to this KB
+                files_from_kb = await Knowledges.get_files_by_id(kb.id)
+                if files_from_kb:
+                    file_ids = [f.id for f in files_from_kb]
+                for fid in file_ids:
+                    if fid not in seen_ids:
+                        file = await Files.get_file_by_id(fid)
+                        if file:
+                            files_to_search.append(file)
+                            seen_ids.add(fid)
+
+        if not files_to_search:
+            return json.dumps({'error': 'No accessible files found'})
+
+        # Search
+        results = []
+        total_matches = 0
+        counts = []
+
+        for file in files_to_search:
+            content = ''
+            if file.data:
+                content = file.data.get('content', '')
+            if not content:
+                continue
+
+            lines = content.split('\n')
+            file_matches = 0
+
+            for i, line in enumerate(lines, 1):
+                if _matches(line):
+                    file_matches += 1
+                    total_matches += 1
+                    if not count_only and len(results) < MAX_GREP_RESULTS:
+                        results.append(f'{file.id}  {file.filename}:{i}: {line}')
+
+            if file_matches > 0 and count_only:
+                counts.append(f'{file.id}  {file.filename}: {file_matches}')
+
+        if count_only:
+            if not counts:
+                return f'No matches for "{pattern}"'
+            return '\n'.join(counts) + f'\n[{total_matches} total matches]'
+
+        if not results:
+            return f'No matches for "{pattern}"'
+
+        output = '\n'.join(results)
+        if total_matches > MAX_GREP_RESULTS:
+            output += f'\n[{MAX_GREP_RESULTS} of {total_matches} matches shown — use file_id to narrow]'
+        return output
+
+    except Exception as e:
+        log.exception(f'grep_knowledge_files error: {e}')
+        return json.dumps({'error': str(e)})
 
 
 async def view_file(
     file_id: str,
     offset: int = 0,
     max_chars: int = DEFAULT_VIEW_FILE_MAX_CHARS,
+    line_numbers: bool = False,
+    start_line: Optional[int] = None,
+    end_line: Optional[int] = None,
     __request__: Request = None,
     __user__: dict = None,
     __model_knowledge__: Optional[list[dict]] = None,
@@ -1738,6 +1370,9 @@ async def view_file(
     :param file_id: The ID of the file to retrieve
     :param offset: Character offset to start reading from (default: 0)
     :param max_chars: Maximum characters to return (default: 10000, hard cap: 100000)
+    :param line_numbers: If true, prefix each line with its 1-indexed line number
+    :param start_line: Optional 1-indexed start line (overrides offset/max_chars when set)
+    :param end_line: Optional 1-indexed end line (inclusive)
     :return: JSON with the file's id, filename, content, and pagination metadata if truncated
     """
     if __request__ is None:
@@ -1764,7 +1399,6 @@ async def view_file(
 
     try:
         from open_webui.models.files import Files
-        from open_webui.utils.access_control.files import has_access_to_file
 
         user_id = __user__.get('id')
         user_role = __user__.get('role', 'user')
@@ -1773,18 +1407,7 @@ async def view_file(
         if not file:
             return json.dumps({'error': 'File not found'})
 
-        if (
-            file.user_id != user_id
-            and user_role != 'admin'
-            and not any(
-                item.get('type') == 'file' and item.get('id') == file_id for item in (__model_knowledge__ or [])
-            )
-            and not await has_access_to_file(
-                file_id=file_id,
-                access_type='read',
-                user=UserModel(**__user__),
-            )
-        ):
+        if not await _has_read_access_to_file(file, user_id, user_role, __model_knowledge__):
             return json.dumps({'error': 'File not found'})
 
         content = ''
@@ -1792,8 +1415,37 @@ async def view_file(
             content = file.data.get('content', '')
 
         total_chars = len(content)
+
+        # Line-based addressing (overrides char-based offset/max_chars)
+        if start_line is not None:
+            all_lines = content.split('\n')
+            total_lines = len(all_lines)
+            s = max(1, int(start_line)) - 1  # 1-indexed to 0-indexed
+            e = min(total_lines, int(end_line) if end_line else s + 100)
+            selected = all_lines[s:e]
+            sliced = '\n'.join(f'{s + i + 1}: {line}' for i, line in enumerate(selected))
+            is_truncated = e < total_lines
+            result = {
+                'id': file.id,
+                'filename': file.filename,
+                'content': sliced,
+                'updated_at': file.updated_at,
+                'created_at': file.created_at,
+                'total_lines': total_lines,
+                'showing_lines': f'{s + 1}-{e}',
+            }
+            if is_truncated:
+                result['truncated'] = True
+                result['next_start_line'] = e + 1
+            return json.dumps(result, ensure_ascii=False)
+
         sliced = content[offset : offset + max_chars]
         is_truncated = (offset + len(sliced)) < total_chars
+
+        if line_numbers:
+            start_ln = content[:offset].count('\n') + 1
+            lines = sliced.split('\n')
+            sliced = '\n'.join(f'{start_ln + i}: {line}' for i, line in enumerate(lines))
 
         result = {
             'id': file.id,
@@ -1821,6 +1473,9 @@ async def view_knowledge_file(
     file_id: str,
     offset: int = 0,
     max_chars: int = DEFAULT_VIEW_FILE_MAX_CHARS,
+    line_numbers: bool = False,
+    start_line: Optional[int] = None,
+    end_line: Optional[int] = None,
     __request__: Request = None,
     __user__: dict = None,
 ) -> str:
@@ -1830,6 +1485,9 @@ async def view_knowledge_file(
     :param file_id: The ID of the file to retrieve
     :param offset: Character offset to start reading from (default: 0)
     :param max_chars: Maximum characters to return (default: 10000, hard cap: 100000)
+    :param line_numbers: If true, prefix each line with its 1-indexed line number
+    :param start_line: Optional 1-indexed start line (overrides offset/max_chars when set)
+    :param end_line: Optional 1-indexed end line (inclusive)
     :return: JSON with the file's id, filename, content, and pagination metadata if truncated
     """
     if __request__ is None:
@@ -1855,9 +1513,9 @@ async def view_knowledge_file(
     offset = max(offset, 0)
 
     try:
+        from open_webui.models.access_grants import AccessGrants
         from open_webui.models.files import Files
         from open_webui.models.knowledge import Knowledges
-        from open_webui.models.access_grants import AccessGrants
 
         user_id = __user__.get('id')
         user_role = __user__.get('role', 'user')
@@ -1897,8 +1555,40 @@ async def view_knowledge_file(
             content = file.data.get('content', '')
 
         total_chars = len(content)
+
+        # Line-based addressing (overrides char-based offset/max_chars)
+        if start_line is not None:
+            all_lines = content.split('\n')
+            total_lines = len(all_lines)
+            s = max(1, int(start_line)) - 1
+            e = min(total_lines, int(end_line) if end_line else s + 100)
+            selected = all_lines[s:e]
+            sliced = '\n'.join(f'{s + i + 1}: {line}' for i, line in enumerate(selected))
+            is_truncated = e < total_lines
+            result = {
+                'id': file.id,
+                'filename': file.filename,
+                'content': sliced,
+                'updated_at': file.updated_at,
+                'created_at': file.created_at,
+                'total_lines': total_lines,
+                'showing_lines': f'{s + 1}-{e}',
+            }
+            if knowledge_info:
+                result['knowledge_id'] = knowledge_info['id']
+                result['knowledge_name'] = knowledge_info['name']
+            if is_truncated:
+                result['truncated'] = True
+                result['next_start_line'] = e + 1
+            return json.dumps(result, ensure_ascii=False)
+
         sliced = content[offset : offset + max_chars]
         is_truncated = (offset + len(sliced)) < total_chars
+
+        if line_numbers:
+            start_ln = content[:offset].count('\n') + 1
+            lines = sliced.split('\n')
+            sliced = '\n'.join(f'{start_ln + i}: {line}' for i, line in enumerate(lines))
 
         result = {
             'id': file.id,
@@ -1926,15 +1616,25 @@ async def view_knowledge_file(
 
 
 async def list_knowledge(
+    knowledge_id: Optional[str] = None,
+    skip: int = 0,
+    count: int = 50,
     __request__: Request = None,
     __user__: dict = None,
     __model_knowledge__: Optional[list[dict]] = None,
 ) -> str:
     """
-    List all knowledge bases, files, and notes attached to the current model.
+    List knowledge bases and files attached to the current model.
     Use this first to discover what knowledge is available before querying or reading files.
+    Without knowledge_id: returns KB summaries (name, description, file_count)
+    plus standalone files — no file listing inside KBs.
+    With knowledge_id: includes paginated file listing for that specific KB.
+    Use skip/count to page through large KBs.
 
-    :return: JSON with knowledge_bases, files, and notes attached to this model
+    :param knowledge_id: Optional KB ID to get file listing for
+    :param skip: Number of files to skip for pagination (default: 0)
+    :param count: Maximum files per page (default: 50, max: 200)
+    :return: JSON with knowledge_bases and files attached to this model
     """
     if __request__ is None:
         return json.dumps({'error': 'Request context not available'})
@@ -1943,13 +1643,28 @@ async def list_knowledge(
         return json.dumps({'error': 'User context not available'})
 
     if not __model_knowledge__:
-        return json.dumps({'knowledge_bases': [], 'files': [], 'notes': []})
+        return json.dumps({'knowledge_bases': [], 'files': []})
+
+    # Coerce parameters from LLM tool calls (may come as strings)
+    if isinstance(skip, str):
+        try:
+            skip = int(skip)
+        except ValueError:
+            skip = 0
+    if isinstance(count, str):
+        try:
+            count = int(count)
+        except ValueError:
+            count = 50
+    if isinstance(knowledge_id, str) and knowledge_id.lower() in ('none', 'null', ''):
+        knowledge_id = None
+
+    count = min(count, 200)
 
     try:
-        from open_webui.models.knowledge import Knowledges
-        from open_webui.models.files import Files
-        from open_webui.models.notes import Notes
         from open_webui.models.access_grants import AccessGrants
+        from open_webui.models.files import Files
+        from open_webui.models.knowledge import Knowledges
 
         user_id = __user__.get('id')
         user_role = __user__.get('role', 'user')
@@ -1957,7 +1672,6 @@ async def list_knowledge(
 
         knowledge_bases = []
         files = []
-        notes = []
 
         for item in __model_knowledge__:
             item_type = item.get('type')
@@ -1986,9 +1700,15 @@ async def list_knowledge(
                         'file_count': file_count,
                     }
 
-                    # Include file listing for each KB
-                    if kb_files:
-                        kb_entry['files'] = [{'id': f.id, 'filename': f.filename} for f in kb_files]
+                    # Include file listing only when this KB is targeted
+                    if knowledge_id and knowledge_id == knowledge.id:
+                        if kb_files:
+                            paged_files = kb_files[skip : skip + count]
+                            kb_entry['files'] = [{'id': f.id, 'filename': f.filename} for f in paged_files]
+                            kb_entry['files_skip'] = skip
+                            kb_entry['files_count'] = len(paged_files)
+                            kb_entry['files_total'] = file_count
+                            kb_entry['has_more'] = skip + count < file_count
 
                     knowledge_bases.append(kb_entry)
 
@@ -2003,30 +1723,10 @@ async def list_knowledge(
                         }
                     )
 
-            elif item_type == 'note':
-                note = await Notes.get_note_by_id(item_id)
-                if note and (
-                    user_role == 'admin'
-                    or note.user_id == user_id
-                    or await AccessGrants.has_access(
-                        user_id=user_id,
-                        resource_type='note',
-                        resource_id=note.id,
-                        permission='read',
-                    )
-                ):
-                    notes.append(
-                        {
-                            'id': note.id,
-                            'title': note.title,
-                        }
-                    )
-
         return json.dumps(
             {
                 'knowledge_bases': knowledge_bases,
                 'files': files,
-                'notes': notes,
             },
             ensure_ascii=False,
         )
@@ -2045,7 +1745,8 @@ async def query_knowledge_files(
 ) -> str:
     """
     Search knowledge base files using semantic/vector search. Searches across collections (KBs),
-    individual files, and notes that the user has access to.
+    individual files that the user has access to.
+    Helpful for internal documentation, uploaded knowledge, and attached model knowledge.
 
     :param query: The search query to find semantically relevant content
     :param knowledge_ids: Optional list of KB ids to limit search to specific knowledge bases
@@ -2078,11 +1779,11 @@ async def query_knowledge_files(
                 knowledge_ids = [knowledge_ids]
 
     try:
-        from open_webui.models.knowledge import Knowledges
-        from open_webui.models.files import Files
-        from open_webui.models.notes import Notes
-        from open_webui.retrieval.utils import query_collection
         from open_webui.models.access_grants import AccessGrants
+        from open_webui.models.files import Files
+        from open_webui.models.knowledge import Knowledges
+        from open_webui.retrieval.external import retrieve_external_knowledge
+        from open_webui.retrieval.utils import query_collection
 
         user_id = __user__.get('id')
         user_role = __user__.get('role', 'user')
@@ -2093,7 +1794,7 @@ async def query_knowledge_files(
             return json.dumps({'error': 'Embedding function not configured'})
 
         collection_names = []
-        note_results = []  # Notes aren't vectorized, handle separately
+        external_knowledges = []
 
         # If model has attached knowledge, use those
         if __model_knowledge__:
@@ -2115,36 +1816,16 @@ async def query_knowledge_files(
                             user_group_ids=set(user_group_ids),
                         )
                     ):
-                        collection_names.append(item_id)
+                        if (knowledge.meta or {}).get('source') == 'external':
+                            external_knowledges.append(knowledge)
+                        else:
+                            collection_names.append(item_id)
 
                 elif item_type == 'file':
                     # Individual file - use file-{id} as collection name
                     file = await Files.get_file_by_id(item_id)
                     if file:
                         collection_names.append(f'file-{item_id}')
-
-                elif item_type == 'note':
-                    # Note - always return full content as context
-                    note = await Notes.get_note_by_id(item_id)
-                    if note and (
-                        user_role == 'admin'
-                        or note.user_id == user_id
-                        or await AccessGrants.has_access(
-                            user_id=user_id,
-                            resource_type='note',
-                            resource_id=note.id,
-                            permission='read',
-                        )
-                    ):
-                        content = note.data.get('content', {}).get('md', '')
-                        note_results.append(
-                            {
-                                'content': content,
-                                'source': note.title,
-                                'note_id': note.id,
-                                'type': 'note',
-                            }
-                        )
 
         elif knowledge_ids:
             # User specified specific KBs
@@ -2161,7 +1842,10 @@ async def query_knowledge_files(
                         user_group_ids=set(user_group_ids),
                     )
                 ):
-                    collection_names.append(knowledge_id)
+                    if (knowledge.meta or {}).get('source') == 'external':
+                        external_knowledges.append(knowledge)
+                    else:
+                        collection_names.append(knowledge_id)
         else:
             # No model knowledge and no specific IDs - search all accessible KBs
             result = await Knowledges.search_knowledge_bases(
@@ -2174,12 +1858,13 @@ async def query_knowledge_files(
                 skip=0,
                 limit=50,
             )
-            collection_names = [knowledge_base.id for knowledge_base in result.items]
+            for knowledge_base in result.items:
+                if (knowledge_base.meta or {}).get('source') == 'external':
+                    external_knowledges.append(knowledge_base)
+                else:
+                    collection_names.append(knowledge_base.id)
 
         chunks = []
-
-        # Add note results first
-        chunks.extend(note_results)
 
         # Query vector collections if any
         if collection_names:
@@ -2206,6 +1891,31 @@ async def query_knowledge_files(
                         chunk_info['distance'] = distances[idx]
                     chunks.append(chunk_info)
 
+        for knowledge in external_knowledges:
+            query_results = await retrieve_external_knowledge(
+                __request__,
+                knowledge,
+                queries=[query],
+                count=count,
+                user=type('UserContext', (), {'id': user_id, 'role': user_role})(),
+            )
+            documents = query_results.get('documents', [[]])[0]
+            metadatas = query_results.get('metadatas', [[]])[0]
+            distances = query_results.get('distances', [[]])[0]
+
+            for idx, doc in enumerate(documents):
+                metadata = metadatas[idx] if idx < len(metadatas) else {}
+                chunk_info = {
+                    'content': doc,
+                    'source': metadata.get('source', metadata.get('name', knowledge.name)),
+                    'file_id': metadata.get('file_id', f'external-{knowledge.id}'),
+                    'type': 'external',
+                    'knowledge_id': knowledge.id,
+                }
+                if idx < len(distances):
+                    chunk_info['distance'] = distances[idx]
+                chunks.append(chunk_info)
+
         # Limit to requested count
         chunks = chunks[:count]
 
@@ -2224,7 +1934,7 @@ async def query_knowledge_bases(
     """
     Search knowledge bases by semantic similarity to query.
     Finds KBs whose name/description match the meaning of your query.
-    Use this to discover relevant knowledge bases before querying their files.
+    Helpful for discovering which knowledge base to query next.
 
     :param query: Natural language query describing what you're looking for
     :param count: Maximum results (default: 5)
@@ -2238,9 +1948,10 @@ async def query_knowledge_bases(
 
     try:
         import heapq
+
         from open_webui.models.knowledge import Knowledges
-        from open_webui.routers.knowledge import KNOWLEDGE_BASES_COLLECTION
         from open_webui.retrieval.vector.async_client import ASYNC_VECTOR_DB_CLIENT
+        from open_webui.routers.knowledge import KNOWLEDGE_BASES_COLLECTION
 
         user_id = __user__.get('id')
         user_group_ids = [group.id for group in await Groups.get_groups_by_member_id(user_id)]
@@ -2339,8 +2050,8 @@ async def view_skill(
         return json.dumps({'error': 'User context not available'})
 
     try:
-        from open_webui.models.skills import Skills
         from open_webui.models.access_grants import AccessGrants
+        from open_webui.models.skills import Skills
 
         user_id = __user__.get('id')
 
@@ -2379,8 +2090,9 @@ async def view_skill(
 # TASK MANAGEMENT TOOLS
 # =============================================================================
 
-from pydantic import BaseModel, Field
 from typing import Literal
+
+from pydantic import BaseModel, Field
 
 VALID_TASK_STATUSES = {'pending', 'in_progress', 'completed', 'cancelled'}
 
@@ -2428,9 +2140,7 @@ async def create_tasks(
     __user__: dict = None,
 ) -> str:
     """
-    Create a task checklist to track progress on multi-step work.
-    Call this once at the start to define all steps, then use
-    update_task to mark each task as you complete it.
+    Create a visible task checklist for multi-step work so progress can be shown in chat.
 
     :param tasks: List of task items. Each item: content (string, required), status (pending|in_progress|completed|cancelled, default pending), id (optional, auto-generated).
     :return: JSON with the full task list and summary counts
@@ -2481,9 +2191,7 @@ async def update_task(
     __user__: dict = None,
 ) -> str:
     """
-    Mark a single task as completed, in_progress, pending, or cancelled.
-    Call this after finishing each step. You MUST call this for every
-    task, including the very last one.
+    Mark a single visible task item as completed, in_progress, pending, or cancelled.
 
     :param id: The task ID to update
     :param status: New status: completed, in_progress, pending, or cancelled (default: completed)
@@ -2563,9 +2271,9 @@ async def create_automation(
         return json.dumps({'error': 'User context not available'})
 
     try:
-        from open_webui.models.automations import Automations, AutomationForm, AutomationData
+        from open_webui.models.automations import AutomationData, AutomationForm, Automations
         from open_webui.models.users import Users
-        from open_webui.utils.automations import validate_rrule, next_run_ns, next_n_runs_ns
+        from open_webui.utils.automations import next_n_runs_ns, next_run_ns, validate_rrule
 
         user_id = __user__.get('id')
         user = await Users.get_user_by_id(user_id)
@@ -2641,9 +2349,9 @@ async def update_automation(
         return json.dumps({'error': 'User context not available'})
 
     try:
-        from open_webui.models.automations import Automations, AutomationForm, AutomationData
+        from open_webui.models.automations import AutomationData, AutomationForm, Automations
         from open_webui.models.users import Users
-        from open_webui.utils.automations import validate_rrule, next_run_ns, next_n_runs_ns
+        from open_webui.utils.automations import next_n_runs_ns, next_run_ns, validate_rrule
 
         user_id = __user__.get('id')
         user = await Users.get_user_by_id(user_id)
@@ -2678,7 +2386,7 @@ async def update_automation(
             is_active=automation.is_active,
         )
 
-        updated = await Automations.update(automation_id, form, next_run_ns(new_rrule, tz=tz))
+        updated = await Automations.update_by_id(automation_id, form, next_run_ns(new_rrule, tz=tz))
 
         return json.dumps(
             {
@@ -2827,7 +2535,7 @@ async def delete_automation(
         return json.dumps({'error': 'User context not available'})
 
     try:
-        from open_webui.models.automations import Automations, AutomationRuns
+        from open_webui.models.automations import AutomationRuns, Automations
 
         user_id = __user__.get('id')
 
@@ -2922,8 +2630,8 @@ async def search_calendar_events(
     __user__: dict = None,
 ) -> str:
     """
-    Search calendar events by text and/or date range.
-    Returns matching events across all accessible calendars.
+    Search calendar events, reminders, and scheduled items by text and/or date range.
+    Helpful for finding upcoming events, reminders, or schedule items.
 
     :param query: Search text to match against event title, description, or location (optional)
     :param start: Only return events starting at or after this datetime, e.g. "2026-04-20 00:00" (optional)
@@ -3019,17 +2727,19 @@ async def create_calendar_event(
     __user__: dict = None,
 ) -> str:
     """
-    Create a new calendar event. If no calendar_id is provided, the event is
-    added to the user's default calendar.
+    Create a calendar event, reminder, or alarm. Use this when the user wants to
+    schedule an event, set a reminder, create an alarm, or says things like
+    "remind me", "don't let me forget", "notify me at", or "add to my calendar".
+    For simple reminders, omit end/location/all_day and set reminder_minutes to 0.
 
-    :param title: Event title
-    :param start: Start datetime string in your local time (e.g. "2026-04-20 09:00" or "2026-04-20T09:00:00")
-    :param end: End datetime string in your local time (optional, omit for point-in-time events)
-    :param description: Event description (optional)
+    :param title: Event or reminder title (e.g. "Team standup", "Take medicine", "Call mom")
+    :param start: Start datetime in the user's local time (e.g. "2026-04-20 09:00")
+    :param end: End datetime in the user's local time (optional — omit for reminders or point-in-time events)
+    :param description: Event description or notes (optional)
     :param calendar_id: Target calendar ID (optional, uses default calendar if omitted)
     :param all_day: Whether this is an all-day event (default: false)
     :param location: Event location (optional)
-    :param reminder_minutes: Minutes before the event to send a reminder notification (optional, default: 10). Use 0 for "at time of event", -1 for no reminder. Accepts any positive integer for custom timing (e.g. 120 for 2 hours before).
+    :param reminder_minutes: Minutes before the event to send a notification (optional, default: 10). Use 0 for "at time of event", -1 for no notification.
     :return: JSON with the created event details including id
     """
     if __request__ is None:
@@ -3039,7 +2749,7 @@ async def create_calendar_event(
         return json.dumps({'error': 'User context not available'})
 
     try:
-        from open_webui.models.calendar import Calendars, CalendarEvents, CalendarEventForm
+        from open_webui.models.calendar import CalendarEventForm, CalendarEvents, Calendars
 
         user_id = __user__.get('id')
 
@@ -3166,8 +2876,8 @@ async def update_calendar_event(
         return json.dumps({'error': 'User context not available'})
 
     try:
-        from open_webui.models.calendar import Calendars, CalendarEvents, CalendarEventUpdateForm
         from open_webui.models.access_grants import AccessGrants
+        from open_webui.models.calendar import CalendarEvents, CalendarEventUpdateForm, Calendars
         from open_webui.models.groups import Groups
 
         user_id = __user__.get('id')
@@ -3177,8 +2887,10 @@ async def update_calendar_event(
             return json.dumps({'error': 'Event not found'})
 
         # Check write access to the event's calendar
-        cal = await Calendars.get_calendar_by_id(event.calendar_id)
-        if cal and cal.user_id != user_id and __user__.get('role') != 'admin':
+        if event.user_id != user_id and __user__.get('role') != 'admin':
+            cal = await Calendars.get_calendar_by_id(event.calendar_id)
+            if not cal:
+                return json.dumps({'error': 'Access denied'})
             user_group_ids = [g.id for g in await Groups.get_groups_by_member_id(user_id)]
             if not await AccessGrants.has_access(
                 user_id=user_id,
@@ -3267,8 +2979,8 @@ async def delete_calendar_event(
         return json.dumps({'error': 'User context not available'})
 
     try:
-        from open_webui.models.calendar import Calendars, CalendarEvents
         from open_webui.models.access_grants import AccessGrants
+        from open_webui.models.calendar import CalendarEvents, Calendars
         from open_webui.models.groups import Groups
 
         user_id = __user__.get('id')
@@ -3278,8 +2990,10 @@ async def delete_calendar_event(
             return json.dumps({'error': 'Event not found'})
 
         # Check write access
-        cal = await Calendars.get_calendar_by_id(event.calendar_id)
-        if cal and cal.user_id != user_id and __user__.get('role') != 'admin':
+        if event.user_id != user_id and __user__.get('role') != 'admin':
+            cal = await Calendars.get_calendar_by_id(event.calendar_id)
+            if not cal:
+                return json.dumps({'error': 'Access denied'})
             user_group_ids = [g.id for g in await Groups.get_groups_by_member_id(user_id)]
             if not await AccessGrants.has_access(
                 user_id=user_id,

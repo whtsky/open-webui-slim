@@ -6,15 +6,7 @@
 	import { Pane, PaneResizer } from 'paneforge';
 
 	import { onMount, tick, getContext } from 'svelte';
-	import {
-		mobile,
-		showControls,
-		showCallOverlay,
-		showArtifacts,
-		showEmbeds,
-		showFileNavPath,
-		user
-	} from '$lib/stores';
+	import { showControls, showCallOverlay, showArtifacts, showEmbeds, user } from '$lib/stores';
 
 	import Controls from './Controls/Controls.svelte';
 	import CallOverlay from './MessageInput/CallOverlay.svelte';
@@ -47,7 +39,9 @@
 	let minSize = 0;
 	let paneReady = false;
 
+	// Tab state for the controls panel
 	let activeTab = savedTab;
+	// svelte-ignore reactive_declaration_module_script_dependency
 	$: {
 		savedTab = activeTab;
 	}
@@ -57,18 +51,15 @@
 	$: showControlsTab = $user?.role === 'admin' || ($user?.permissions?.chat?.controls ?? true);
 	$: showOverviewTab = hasMessages;
 
+	// Tab fallback: if active tab becomes hidden, switch to next available
 	$: if (!showOverviewTab && activeTab === 'overview') activeTab = 'controls';
 	$: if (!showControlsTab && activeTab === 'controls') {
 		if (showOverviewTab) activeTab = 'overview';
 	}
 
+	// Auto-close if there are no visible tabs
 	$: if (!showControlsTab && !showOverviewTab) {
 		showControls.set(false);
-	}
-
-	$: if ($showFileNavPath) {
-		activeTab = 'controls';
-		showControls.set(true);
 	}
 
 	export const openPane = () => {
@@ -117,11 +108,13 @@
 		let resizeObserver: ResizeObserver | null = null;
 		let isDestroyed = false;
 
+		// Wait for Svelte to render the Pane after largeScreen changed
 		const init = async () => {
 			await tick();
 
 			if (isDestroyed) return;
 
+			// If controls were persisted as open, set the pane to the saved size
 			if ($showControls && pane) {
 				openPane();
 			}
@@ -181,6 +174,7 @@
 
 	$: if (paneReady && !chatId) closeHandler();
 
+	// Helper: is a "special" full-screen panel active?
 	$: specialPanel = $showCallOverlay || $showArtifacts || $showEmbeds;
 </script>
 
@@ -211,7 +205,9 @@
 				{:else if $showArtifacts}
 					<Artifacts {history} />
 				{:else}
+					<!-- Controls tabs -->
 					<div class="flex flex-col h-full min-h-0">
+						<!-- Tab bar -->
 						<div class="flex items-center justify-between px-2 pt-2 pb-2 shrink-0">
 							<div class="flex gap-1 min-w-0 overflow-x-auto scrollbar-hidden">
 								{#if showControlsTab}
@@ -337,7 +333,9 @@
 					{:else if $showArtifacts}
 						<Artifacts {history} overlay={dragged} />
 					{:else}
+						<!-- Controls tabs -->
 						<div class="flex flex-col h-full min-h-0">
+							<!-- Tab bar -->
 							<div class="flex items-center justify-between px-2 pt-2 pb-2 shrink-0">
 								<div class="flex gap-1 min-w-0 overflow-x-auto scrollbar-hidden">
 									{#if showControlsTab}

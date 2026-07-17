@@ -233,7 +233,7 @@
 											tooltip={$i18n.t(
 												'Set the default models that are automatically selected for all users when a new chat is created.'
 											)}
-											models={$models}
+											models={$models.filter((model) => !(model?.info?.meta?.hidden ?? false))}
 											bind:modelIds={defaultModelIds}
 										/>
 
@@ -244,7 +244,7 @@
 											tooltip={$i18n.t(
 												'Set the models that are automatically pinned to the sidebar for all users.'
 											)}
-											models={$models}
+											models={$models.filter((model) => !(model?.info?.meta?.hidden ?? false))}
 											bind:modelIds={defaultPinnedModelIds}
 										/>
 
@@ -362,7 +362,7 @@
 
 											{#if showDefaultParams}
 												<div class="mt-2">
-													<AdvancedParams admin={true} bind:params={defaultParams} />
+													<AdvancedParams admin={true} custom={true} bind:params={defaultParams} />
 												</div>
 											{/if}
 										</div>

@@ -43,9 +43,7 @@ ENV PYTHONUNBUFFERED=1
 
 ## Basis ##
 ENV ENV=prod \
-    PORT=8080 \
-    USE_CUDA_DOCKER=false \
-    USE_SLIM_DOCKER=true
+    PORT=8080
 
 ## Provider URL Config ##
 ENV OPENAI_API_BASE_URL=""
@@ -57,22 +55,13 @@ ENV OPENAI_API_KEY="" \
     DO_NOT_TRACK=true \
     ANONYMIZED_TELEMETRY=false
 
-#### Other models #########################################################
-## whisper TTS model settings (kept for config compat, but local whisper is removed) ##
-ENV WHISPER_MODEL="base" \
-    WHISPER_MODEL_DIR="/app/backend/data/cache/whisper/models"
-
 ## RAG Embedding model settings (local sentence-transformers removed, use external APIs) ##
 ENV RAG_EMBEDDING_MODEL="" \
-    RAG_RERANKING_MODEL="" \
-    SENTENCE_TRANSFORMERS_HOME="/app/backend/data/cache/embedding/models"
+    RAG_RERANKING_MODEL=""
 
 ## Tiktoken model settings ##
 ENV TIKTOKEN_ENCODING_NAME="cl100k_base" \
     TIKTOKEN_CACHE_DIR="/app/backend/data/cache/tiktoken"
-
-## Hugging Face download cache ##
-ENV HF_HOME="/app/backend/data/cache/embedding/models"
 
 WORKDIR /app/backend
 
@@ -94,7 +83,7 @@ RUN chown -R $UID:$GID /app $HOME
 # Install common system dependencies (slim: removed build-essential, python3-dev, libsm6, libxext6 — not needed without torch/opencv compilation)
 RUN apt-get update && \
     apt-get install -y --no-install-recommends \
-    git pandoc netcat-openbsd curl jq \
+    git pandoc netcat-openbsd curl jq ca-certificates \
     ffmpeg zstd \
     && rm -rf /var/lib/apt/lists/*
 

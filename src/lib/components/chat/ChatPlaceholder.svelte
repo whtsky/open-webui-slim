@@ -1,12 +1,12 @@
 <script lang="ts">
-	import { WEBUI_API_BASE_URL, WEBUI_BASE_URL } from '$lib/constants';
+	import { WEBUI_API_BASE_URL } from '$lib/constants';
 	import { marked } from 'marked';
 	import DOMPurify from 'dompurify';
 
 	import { config, user, models as _models, temporaryChatEnabled } from '$lib/stores';
 	import { onMount, getContext } from 'svelte';
 
-	import { blur, fade } from 'svelte/transition';
+	import { fade } from 'svelte/transition';
 
 	import Suggestions from './Suggestions.svelte';
 	import { sanitizeResponseContent } from '$lib/utils';
@@ -110,17 +110,8 @@
 						{#if models[selectedModelIdx]?.info?.meta?.user}
 							<div class="mt-0.5 text-sm font-normal text-gray-400 dark:text-gray-500">
 								By
-								{#if models[selectedModelIdx]?.info?.meta?.user.community}
-									<a
-										href="https://openwebui.com/m/{models[selectedModelIdx]?.info?.meta?.user
-											.username}"
-										>{models[selectedModelIdx]?.info?.meta?.user.name
-											? models[selectedModelIdx]?.info?.meta?.user.name
-											: `@${models[selectedModelIdx]?.info?.meta?.user.username}`}</a
-									>
-								{:else}
-									{models[selectedModelIdx]?.info?.meta?.user.name}
-								{/if}
+								{models[selectedModelIdx]?.info?.meta?.user.name ??
+									`@${models[selectedModelIdx]?.info?.meta?.user.username}`}
 							</div>
 						{/if}
 					{:else}

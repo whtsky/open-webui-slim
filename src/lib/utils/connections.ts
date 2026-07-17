@@ -72,7 +72,3 @@ export const removeOpenAIConnection = async (token: string, url: string) => {
 		OPENAI_API_CONFIGS: newConfigs
 	});
 };
-
-// Terminal connections are not available in the slim fork.
-export const addTerminalConnection = async (_token: string, _connection: unknown) => null;
-export const removeTerminalConnection = async (_token: string, _url: string) => null;

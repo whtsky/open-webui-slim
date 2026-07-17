@@ -1,14 +1,11 @@
-import random
 import logging
 import sys
 
 from fastapi import Request
+from open_webui.env import BYPASS_MODEL_ACCESS_CONTROL, GLOBAL_LOG_LEVEL
 from open_webui.models.users import UserModel
-from open_webui.models.models import Models
-from open_webui.utils.models import check_model_access
-from open_webui.env import GLOBAL_LOG_LEVEL, BYPASS_MODEL_ACCESS_CONTROL
-
 from open_webui.routers.openai import embeddings as openai_embeddings
+from open_webui.utils.models import check_model_access
 
 logging.basicConfig(stream=sys.stdout, level=GLOBAL_LOG_LEVEL)
 log = logging.getLogger(__name__)
@@ -21,7 +18,7 @@ async def generate_embeddings(
     bypass_filter: bool = False,
 ):
     """
-    Dispatch and handle embeddings generation based on the model type (OpenAI, Ollama).
+    Dispatch embeddings generation to an OpenAI-compatible provider.
 
     Args:
         request (Request): The FastAPI request context.
@@ -63,10 +60,6 @@ async def generate_embeddings(
         if not bypass_filter and user.role == 'user':
             await check_model_access(user, model)
 
-    if model.get('owned_by') == 'ollama':
-        raise Exception('Ollama models are no longer supported.')
-
-    # Default: OpenAI or compatible backend
     return await openai_embeddings(
         request=request,
         form_data=form_data,

@@ -207,6 +207,8 @@ type RegisterOAuthClientForm = {
 	client_id: string;
 	client_name?: string;
 	client_secret?: string;
+	oauth_server_url?: string;
+	oauth_scope?: string;
 };
 
 export const registerOAuthClient = async (
@@ -247,6 +249,17 @@ export const registerOAuthClient = async (
 export const getOAuthClientAuthorizationUrl = (clientId: string, type: null | string = null) => {
 	const oauthClientId = type ? `${type}:${clientId}` : clientId;
 	return `${WEBUI_BASE_URL}/oauth/clients/${oauthClientId}/authorize`;
+};
+
+export const initiateOAuthRedirect = (tool: {
+	id: string;
+	serverId: string;
+	authType?: string | null;
+}) => {
+	sessionStorage.setItem('pendingOAuthToolId', tool.id);
+	sessionStorage.setItem('oauthRedirectInProgressToolId', tool.id);
+	const authUrl = getOAuthClientAuthorizationUrl(tool.serverId, tool.authType ?? 'mcp');
+	window.open(authUrl, '_self', 'noopener');
 };
 
 export const getModelsDefaults = async (token: string) => {

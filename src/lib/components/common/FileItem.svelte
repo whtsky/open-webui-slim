@@ -33,7 +33,6 @@
 
 	import DocumentPage from '../icons/DocumentPage.svelte';
 	import Database from '../icons/Database.svelte';
-	import PageEdit from '../icons/PageEdit.svelte';
 	import ChatBubble from '../icons/ChatBubble.svelte';
 	import Folder from '../icons/Folder.svelte';
 	let showModal = false;
@@ -107,19 +106,15 @@
 				<Tooltip
 					content={type === 'collection'
 						? $i18n.t('Collection')
-						: type === 'note'
-							? $i18n.t('Note')
-							: type === 'chat'
-								? $i18n.t('Chat')
-								: type === 'file'
-									? $i18n.t('File')
-									: $i18n.t('Document')}
+						: type === 'chat'
+							? $i18n.t('Chat')
+							: type === 'file'
+								? $i18n.t('File')
+								: $i18n.t('Document')}
 					placement="top"
 				>
 					{#if type === 'collection'}
 						<Database />
-					{:else if type === 'note'}
-						<PageEdit />
 					{:else if type === 'chat'}
 						<ChatBubble />
 					{:else if type === 'folder'}
@@ -147,8 +142,6 @@
 			>
 				{#if type === 'file'}
 					{$i18n.t('File')}
-				{:else if type === 'note'}
-					{$i18n.t('Note')}
 				{:else if type === 'doc'}
 					{$i18n.t('Document')}
 				{:else if type === 'collection'}

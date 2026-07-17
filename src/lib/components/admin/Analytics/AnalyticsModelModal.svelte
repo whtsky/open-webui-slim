@@ -16,6 +16,7 @@
 	const i18n = getContext('i18n');
 
 	type Tab = 'overview' | 'chats';
+	type ChatSortKey = 'title' | 'updated_at' | 'user_name';
 	let selectedTab: Tab = 'overview';
 
 	// Overview tab state
@@ -32,6 +33,8 @@
 	}> = [];
 	let chatListLoading = false;
 	let allChatsLoaded = false;
+	let chatOrderBy: ChatSortKey = 'updated_at';
+	let chatDirection: 'asc' | 'desc' = 'desc';
 	const PAGE_SIZE = 50;
 
 	const close = () => {
@@ -39,6 +42,8 @@
 		selectedTab = 'overview';
 		chatList = [];
 		allChatsLoaded = false;
+		chatOrderBy = 'updated_at';
+		chatDirection = 'desc';
 		tags = [];
 		onClose();
 	};
@@ -47,7 +52,7 @@
 		if (!model?.id) return;
 		loadingOverview = true;
 		try {
-			const result = await getModelOverview(localStorage.token, model.id, 0);
+			const result = await getModelOverview(localStorage.token, model.id);
 			tags = result?.tags ?? [];
 		} catch (err) {
 			console.error('Failed to load overview:', err);
@@ -68,7 +73,9 @@
 				startDate,
 				endDate,
 				0,
-				PAGE_SIZE
+				PAGE_SIZE,
+				chatOrderBy,
+				chatDirection
 			);
 			const chats = res?.chats ?? [];
 			chatList = chats.map((c: any) => ({
@@ -78,7 +85,7 @@
 				user_id: c.user_id,
 				user_name: c.user_name
 			}));
-			allChatsLoaded = chats.length < PAGE_SIZE;
+			allChatsLoaded = chatList.length >= (res?.total ?? chats.length);
 		} catch (err) {
 			console.error('Failed to load chats:', err);
 			chatList = [];
@@ -98,7 +105,9 @@
 				startDate,
 				endDate,
 				skip,
-				PAGE_SIZE
+				PAGE_SIZE,
+				chatOrderBy,
+				chatDirection
 			);
 			const chats = res?.chats ?? [];
 			const newChats = chats.map((c: any) => ({
@@ -111,11 +120,21 @@
 			const existingIds = new Set(chatList.map((c) => c.id));
 			const uniqueNewChats = newChats.filter((c) => !existingIds.has(c.id));
 			chatList = [...chatList, ...uniqueNewChats];
-			allChatsLoaded = chats.length < PAGE_SIZE;
+			allChatsLoaded = chatList.length >= (res?.total ?? chatList.length);
 		} catch (err) {
 			console.error('Failed to load more chats:', err);
 		}
 		chatListLoading = false;
+	};
+
+	const setChatSort = (key: ChatSortKey) => {
+		if (chatOrderBy === key) {
+			chatDirection = chatDirection === 'asc' ? 'desc' : 'asc';
+		} else {
+			chatOrderBy = key;
+			chatDirection = key === 'updated_at' ? 'desc' : 'asc';
+		}
+		loadChats();
 	};
 
 	const selectTab = (tab: Tab) => {
@@ -130,6 +149,8 @@
 		selectedTab = 'overview';
 		chatList = [];
 		allChatsLoaded = false;
+		chatOrderBy = 'updated_at';
+		chatDirection = 'desc';
 		loadOverview();
 	}
 </script>
@@ -174,13 +195,11 @@
 		<div class="px-5 pb-4 dark:text-gray-200">
 			{#if selectedTab === 'overview'}
 				<!-- Tags -->
-				<div class="mb-4 mt-3">
+				<div class="mb-4">
 					<div class="text-xs text-gray-500 mb-2 font-medium uppercase tracking-wide">
 						{$i18n.t('Tags')}
 					</div>
-					{#if loadingOverview}
-						<span class="text-gray-500 text-sm">{$i18n.t('Loading...')}</span>
-					{:else if tags.length}
+					{#if tags.length}
 						<div class="flex flex-wrap gap-1 -mx-1">
 							{#each tags as tagInfo}
 								<span class="px-2 py-0.5 rounded-full bg-gray-100 dark:bg-gray-850 text-xs">
@@ -200,6 +219,9 @@
 						allLoaded={allChatsLoaded}
 						showUserInfo={true}
 						shareUrl={true}
+						orderBy={chatOrderBy}
+						direction={chatDirection}
+						onSort={setChatSort}
 						onLoadMore={loadMoreChats}
 						onChatClick={() => (show = false)}
 					/>

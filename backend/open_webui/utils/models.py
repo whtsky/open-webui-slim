@@ -1,37 +1,25 @@
-import copy
-import time
-import logging
 import asyncio
+import copy
+import logging
 import sys
 
-from aiocache import cached
 from fastapi import Request
-
-from open_webui.socket.utils import RedisDict
-from open_webui.routers import openai
+from open_webui.config import BYPASS_ADMIN_ACCESS_CONTROL
+from open_webui.env import BYPASS_MODEL_ACCESS_CONTROL, GLOBAL_LOG_LEVEL
 from open_webui.functions import get_function_models
-
-
-from open_webui.models.functions import Functions
-from open_webui.models.models import Models
 from open_webui.models.access_grants import AccessGrants
+from open_webui.models.config import Config
+from open_webui.models.functions import Functions
 from open_webui.models.groups import Groups
-
-
+from open_webui.models.models import Models
+from open_webui.models.users import UserModel
+from open_webui.routers import openai
+from open_webui.socket.utils import RedisDict
+from open_webui.utils.access_control import has_base_model_access
 from open_webui.utils.plugin import (
-    load_function_module_by_id,
+    get_functions_cache,
     get_function_module_from_cache,
 )
-from open_webui.utils.access_control import has_access, has_base_model_access
-
-
-from open_webui.config import (
-    BYPASS_ADMIN_ACCESS_CONTROL,
-    DEFAULT_ARENA_MODEL,
-)
-
-from open_webui.env import BYPASS_MODEL_ACCESS_CONTROL, GLOBAL_LOG_LEVEL
-from open_webui.models.users import UserModel
 
 logging.basicConfig(stream=sys.stdout, level=GLOBAL_LOG_LEVEL)
 log = logging.getLogger(__name__)
@@ -43,11 +31,8 @@ async def fetch_openai_models(request: Request, user: UserModel = None):
 
 
 async def get_all_base_models(request: Request, user: UserModel = None):
-    openai_task = (
-        fetch_openai_models(request, user)
-        if request.app.state.config.ENABLE_OPENAI_API
-        else asyncio.sleep(0, result=[])
-    )
+    config = await Config.get_many('openai.enable')
+    openai_task = fetch_openai_models(request, user) if config.get('openai.enable') else asyncio.sleep(0, result=[])
     function_task = get_function_models(request)
 
     openai_models, function_models = await asyncio.gather(openai_task, function_task)
@@ -56,15 +41,19 @@ async def get_all_base_models(request: Request, user: UserModel = None):
 
 
 async def get_all_models(request, refresh: bool = False, user: UserModel = None):
+    config = await Config.get_many('models.base_models_cache')
     if (
         request.app.state.MODELS
         and request.app.state.BASE_MODELS
-        and (request.app.state.config.ENABLE_BASE_MODELS_CACHE and not refresh)
+        and (config.get('models.base_models_cache') and not refresh)
     ):
         base_models = request.app.state.BASE_MODELS
     else:
         base_models = await get_all_base_models(request, user=user)
-        request.app.state.BASE_MODELS = base_models
+        if base_models:
+            request.app.state.BASE_MODELS = base_models
+        else:
+            base_models = request.app.state.BASE_MODELS
 
     # deep copy the base models to avoid modifying the original list
     models = [model.copy() for model in base_models]
@@ -72,41 +61,6 @@ async def get_all_models(request, refresh: bool = False, user: UserModel = None)
     # If there are no models, return an empty list
     if len(models) == 0:
         return []
-
-    # Add arena models
-    if request.app.state.config.ENABLE_EVALUATION_ARENA_MODELS:
-        arena_models = []
-        if len(request.app.state.config.EVALUATION_ARENA_MODELS) > 0:
-            arena_models = [
-                {
-                    'id': model['id'],
-                    'name': model['name'],
-                    'info': {
-                        'meta': model['meta'],
-                    },
-                    'object': 'model',
-                    'created': int(time.time()),
-                    'owned_by': 'arena',
-                    'arena': True,
-                }
-                for model in request.app.state.config.EVALUATION_ARENA_MODELS
-            ]
-        else:
-            # Add default arena model
-            arena_models = [
-                {
-                    'id': DEFAULT_ARENA_MODEL['id'],
-                    'name': DEFAULT_ARENA_MODEL['name'],
-                    'info': {
-                        'meta': DEFAULT_ARENA_MODEL['meta'],
-                    },
-                    'object': 'model',
-                    'created': int(time.time()),
-                    'owned_by': 'arena',
-                    'arena': True,
-                }
-            ]
-        models = models + arena_models
 
     global_action_ids = {function.id for function in await Functions.get_global_action_functions()}
     enabled_action_ids = {function.id for function in await Functions.get_functions_by_type('action', active_only=True)}
@@ -116,10 +70,7 @@ async def get_all_models(request, refresh: bool = False, user: UserModel = None)
 
     custom_models = await Models.get_all_models()
 
-    # Single O(1) lookup by model ID.
-    base_model_lookup = {}
-    for model in models:
-        base_model_lookup[model['id']] = model
+    base_model_lookup = {model['id']: model for model in models}
 
     existing_ids = {m['id'] for m in models}
 
@@ -158,8 +109,6 @@ async def get_all_models(request, refresh: bool = False, user: UserModel = None)
             pipe = None
 
             base_model = base_model_lookup.get(custom_model.base_model_id)
-            if base_model is None:
-                base_model = base_model_lookup.get(custom_model.base_model_id.split(':')[0])
             if base_model:
                 owned_by = base_model.get('owned_by', 'unknown')
                 if 'pipe' in base_model:
@@ -175,6 +124,8 @@ async def get_all_models(request, refresh: bool = False, user: UserModel = None)
                 'connection_type': connection_type,
                 'preset': True,
                 **({'pipe': pipe} if pipe is not None else {}),
+                **({'provider': base_model.get('provider')} if base_model and base_model.get('provider') else {}),
+                **({'loaded': base_model.get('loaded')} if base_model and base_model.get('loaded') is not None else {}),
             }
 
             info = custom_model.model_dump()
@@ -271,7 +222,7 @@ async def get_all_models(request, refresh: bool = False, user: UserModel = None)
 
     # Apply global model defaults to all models
     # Per-model overrides take precedence over global defaults
-    default_metadata = getattr(request.app.state.config, 'DEFAULT_MODEL_METADATA', None) or {}
+    default_metadata = await Config.get('models.default_metadata', {}) or {}
 
     if default_metadata:
         for model in models:
@@ -293,10 +244,11 @@ async def get_all_models(request, refresh: bool = False, user: UserModel = None)
     # Batch-fetch all function valves in one query to avoid N+1 DB hits
     # inside get_action_priority (previously called per action × per model).
     all_function_valves = await Functions.get_function_valves_by_ids(list(all_function_ids))
+    functions_cache = get_functions_cache(request)
 
     def get_action_priority(action_id):
         try:
-            function_module = request.app.state.FUNCTIONS.get(action_id)
+            function_module = functions_cache.get(action_id)
             if function_module and hasattr(function_module, 'Valves'):
                 valves_db = all_function_valves.get(action_id)
                 valves = function_module.Valves(**(valves_db if valves_db else {}))
@@ -326,7 +278,7 @@ async def get_all_models(request, refresh: bool = False, user: UserModel = None)
                 log.info(f'Action not found: {action_id}')
                 continue
 
-            function_module = request.app.state.FUNCTIONS.get(action_id)
+            function_module = functions_cache.get(action_id)
             if function_module is None:
                 log.info(f'Failed to load action module: {action_id}')
                 continue
@@ -339,7 +291,7 @@ async def get_all_models(request, refresh: bool = False, user: UserModel = None)
                 log.info(f'Filter not found: {filter_id}')
                 continue
 
-            function_module = request.app.state.FUNCTIONS.get(filter_id)
+            function_module = functions_cache.get(filter_id)
             if function_module is None:
                 log.info(f'Failed to load filter module: {filter_id}')
                 continue
@@ -350,7 +302,11 @@ async def get_all_models(request, refresh: bool = False, user: UserModel = None)
 
     models_dict = {model['id']: model for model in models}
     if isinstance(request.app.state.MODELS, RedisDict):
-        request.app.state.MODELS.set(models_dict)
+        try:
+            request.app.state.MODELS.set(models_dict)
+        except Exception as e:
+            log.warning(f'Failed to update Redis model cache, using in-process cache: {e}')
+            request.app.state.MODELS = models_dict
     else:
         request.app.state.MODELS = models_dict
 
@@ -358,35 +314,24 @@ async def get_all_models(request, refresh: bool = False, user: UserModel = None)
 
 
 async def check_model_access(user, model, db=None):
-    if model.get('arena'):
-        meta = model.get('info', {}).get('meta', {})
-        access_grants = meta.get('access_grants', [])
-        if not await has_access(
-            user.id,
+    model_info = await Models.get_model_by_id(model.get('id'), db=db)
+    if not model_info:
+        raise Exception('Model not found')
+    elif not (
+        user.id == model_info.user_id
+        or await AccessGrants.has_access(
+            user_id=user.id,
+            resource_type='model',
+            resource_id=model_info.id,
             permission='read',
-            access_grants=access_grants,
             db=db,
-        ):
-            raise Exception('Model not found')
-    else:
-        model_info = await Models.get_model_by_id(model.get('id'), db=db)
-        if not model_info:
-            raise Exception('Model not found')
-        elif not (
-            user.id == model_info.user_id
-            or await AccessGrants.has_access(
-                user_id=user.id,
-                resource_type='model',
-                resource_id=model_info.id,
-                permission='read',
-                db=db,
-            )
-        ):
-            raise Exception('Model not found')
+        )
+    ):
+        raise Exception('Model not found')
 
-        # Enforce access on chained base models
-        if not await has_base_model_access(user.id, model_info, db=db):
-            raise Exception('Model not found')
+    # Enforce access on chained base models
+    if not await has_base_model_access(user.id, model_info, db=db):
+        raise Exception('Model not found')
 
 
 async def get_filtered_models(models, user, db=None):
@@ -396,8 +341,6 @@ async def get_filtered_models(models, user, db=None):
     ) and not BYPASS_MODEL_ACCESS_CONTROL:
         model_infos = {}
         for model in models:
-            if model.get('arena'):
-                continue
             info = model.get('info')
             if info:
                 model_infos[model['id']] = info
@@ -416,18 +359,6 @@ async def get_filtered_models(models, user, db=None):
 
         filtered_models = []
         for model in models:
-            if model.get('arena'):
-                meta = model.get('info', {}).get('meta', {})
-                access_grants = meta.get('access_grants', [])
-                if await has_access(
-                    user.id,
-                    permission='read',
-                    access_grants=access_grants,
-                    user_group_ids=user_group_ids,
-                ):
-                    filtered_models.append(model)
-                continue
-
             model_info = model_infos.get(model['id'])
             if model_info:
                 if (

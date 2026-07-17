@@ -37,13 +37,13 @@ from urllib.parse import parse_qs, urlencode
 
 from fastapi.responses import JSONResponse, RedirectResponse
 from fastapi.security import HTTPAuthorizationCredentials
+from open_webui.env import CUSTOM_API_KEY_HEADER
+from open_webui.internal.db import ScopedSession
+from open_webui.models.config import Config
+from open_webui.utils.auth import get_http_authorization_cred
 from starlette.datastructures import MutableHeaders
 from starlette.requests import Request
 from starlette.types import ASGIApp, Message, Receive, Scope, Send
-
-from open_webui.env import CUSTOM_API_KEY_HEADER
-from open_webui.internal.db import ScopedSession
-from open_webui.utils.auth import get_http_authorization_cred
 
 log = logging.getLogger(__name__)
 
@@ -85,6 +85,13 @@ class CommitSessionMiddleware:
 
     async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
         if scope['type'] != 'http':
+            await self.app(scope, receive, send)
+            return
+
+        path = scope.get('path', '')
+        # Keep health probes independent from sync session commit/remove
+        # so DB pressure cannot delay or fail probe responses.
+        if path in {'/health', '/ready', '/health/db'}:
             await self.app(scope, receive, send)
             return
 
@@ -159,7 +166,7 @@ class AuthTokenMiddleware:
                 token = HTTPAuthorizationCredentials(scheme='Bearer', credentials=api_key)
 
         request.state.token = token
-        request.state.enable_api_keys = self._fastapi_app.state.config.ENABLE_API_KEYS
+        request.state.enable_api_keys = await Config.get('auth.enable_api_keys')
 
         async def send_with_timing(message: Message) -> None:
             if message['type'] == 'http.response.start':
@@ -208,12 +215,7 @@ class WebsocketUpgradeGuardMiddleware:
 
 
 class RedirectMiddleware:
-    """Rewrites a couple of legacy entry-points to the SPA's own routes:
-
-    * ``GET /watch?v=ID`` (YouTube) → ``/?youtube=ID``
-    * ``GET /?shared=…`` (PWA share-target) → ``/?youtube=…`` /
-      ``/?load-url=…`` / ``/?q=…``
-    """
+    """Rewrite PWA share-target input to the SPA's own routes."""
 
     def __init__(self, app: ASGIApp) -> None:
         self.app = app
@@ -223,14 +225,10 @@ class RedirectMiddleware:
             await self.app(scope, receive, send)
             return
 
-        path = scope.get('path', '')
         query_string = scope.get('query_string', b'').decode('latin-1', errors='replace')
         query_params = parse_qs(query_string)
 
         redirect_params: dict[str, str] = {}
-        if path.endswith('/watch') and 'v' in query_params and query_params['v']:
-            redirect_params['youtube'] = query_params['v'][0]
-
         if 'shared' in query_params and query_params['shared']:
             text = query_params['shared'][0]
             if text:

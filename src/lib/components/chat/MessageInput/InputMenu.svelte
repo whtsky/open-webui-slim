@@ -11,7 +11,6 @@
 	import Tooltip from '$lib/components/common/Tooltip.svelte';
 	import DocumentArrowUp from '$lib/components/icons/DocumentArrowUp.svelte';
 	import Camera from '$lib/components/icons/Camera.svelte';
-	import Note from '$lib/components/icons/Note.svelte';
 	import Clip from '$lib/components/icons/Clip.svelte';
 	import ChatBubbleOval from '$lib/components/icons/ChatBubbleOval.svelte';
 	import Refresh from '$lib/components/icons/Refresh.svelte';

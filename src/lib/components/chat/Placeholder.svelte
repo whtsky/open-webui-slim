@@ -1,16 +1,13 @@
 <script lang="ts">
-	import { toast } from 'svelte-sonner';
 	import { marked } from 'marked';
 	import DOMPurify from 'dompurify';
 
-	import { onMount, getContext, tick, createEventDispatcher } from 'svelte';
-	import { blur, fade } from 'svelte/transition';
+	import { getContext, createEventDispatcher } from 'svelte';
+	import { fade } from 'svelte/transition';
 
 	const dispatch = createEventDispatcher();
 
 	import { getChatList } from '$lib/apis/chats';
-	import { updateFolderById } from '$lib/apis/folders';
-
 	import {
 		config,
 		user,
@@ -20,8 +17,8 @@
 		chats,
 		currentChatPage
 	} from '$lib/stores';
-	import { sanitizeResponseContent, extractCurlyBraceWords } from '$lib/utils';
-	import { WEBUI_API_BASE_URL, WEBUI_BASE_URL } from '$lib/constants';
+	import { sanitizeResponseContent } from '$lib/utils';
+	import { WEBUI_API_BASE_URL } from '$lib/constants';
 
 	import Suggestions from './Suggestions.svelte';
 	import Tooltip from '$lib/components/common/Tooltip.svelte';
@@ -47,6 +44,7 @@
 	export let messageInput = null;
 
 	export let selectedToolIds = [];
+	export let selectedSkillIds = [];
 	export let selectedFilterIds = [];
 	export let pendingOAuthTools = [];
 
@@ -58,6 +56,7 @@
 	export let onUpload: Function = (e) => {};
 	export let onSelect = (e) => {};
 	export let onChange = (e) => {};
+	export let onWebSearchToggle: Function = () => {};
 
 	export let toolServers = [];
 
@@ -71,6 +70,15 @@
 	}
 
 	$: models = selectedModels.map((id) => $_models.find((m) => m.id === id));
+
+	// True when viewing a shared folder the current user doesn't own AND lacks write access
+	$: folderReadOnly =
+		$selectedFolder != null &&
+		$selectedFolder.user_id !== $user?.id &&
+		$selectedFolder.permission !== 'write';
+
+	// True when the current user does NOT own this folder (hide management menus)
+	$: folderNotOwned = $selectedFolder != null && $selectedFolder.user_id !== $user?.id;
 </script>
 
 <div class="m-auto w-full max-w-6xl px-2 @2xl:px-20 translate-y-6 py-24 text-center">
@@ -93,6 +101,7 @@
 			{#if $selectedFolder}
 				<FolderTitle
 					folder={$selectedFolder}
+					readOnly={folderNotOwned}
 					onUpdate={async (folder) => {
 						await chats.set(await getChatList(localStorage.token, $currentChatPage));
 						currentChatPage.set(1);
@@ -189,17 +198,8 @@
 							{#if models[selectedModelIdx]?.info?.meta?.user}
 								<div class="mt-0.5 text-sm font-normal text-gray-400 dark:text-gray-500">
 									By
-									{#if models[selectedModelIdx]?.info?.meta?.user.community}
-										<a
-											href="https://openwebui.com/m/{models[selectedModelIdx]?.info?.meta?.user
-												.username}"
-											>{models[selectedModelIdx]?.info?.meta?.user.name
-												? models[selectedModelIdx]?.info?.meta?.user.name
-												: `@${models[selectedModelIdx]?.info?.meta?.user.username}`}</a
-										>
-									{:else}
-										{models[selectedModelIdx]?.info?.meta?.user.name}
-									{/if}
+									{models[selectedModelIdx]?.info?.meta?.user.name ??
+										`@${models[selectedModelIdx]?.info?.meta?.user.username}`}
 								</div>
 							{/if}
 						{/if}
@@ -208,31 +208,35 @@
 			{/if}
 
 			<div class="text-base font-normal @md:max-w-3xl w-full py-3 {atSelectedModel ? 'mt-2' : ''}">
-				<MessageInput
-					bind:this={messageInput}
-					{history}
-					{selectedModels}
-					bind:files
-					bind:prompt
-					bind:autoScroll
-					bind:selectedToolIds
-					bind:selectedFilterIds
-					bind:imageGenerationEnabled
-					bind:webSearchEnabled
-					bind:atSelectedModel
-					bind:showCommands
-					bind:dragged
-					{pendingOAuthTools}
-					{toolServers}
-					{stopResponse}
-					{createMessagePair}
-					placeholder={$i18n.t('How can I help you today?')}
-					{onChange}
-					{onUpload}
-					on:submit={(e) => {
-						dispatch('submit', e.detail);
-					}}
-				/>
+				{#if !($selectedFolder && folderReadOnly)}
+					<MessageInput
+						bind:this={messageInput}
+						{history}
+						{selectedModels}
+						bind:files
+						bind:prompt
+						bind:autoScroll
+						bind:selectedToolIds
+						bind:selectedSkillIds
+						bind:selectedFilterIds
+						bind:imageGenerationEnabled
+						bind:webSearchEnabled
+						bind:atSelectedModel
+						bind:showCommands
+						bind:dragged
+						{pendingOAuthTools}
+						{toolServers}
+						{stopResponse}
+						{createMessagePair}
+						placeholder={$i18n.t('How can I help you today?')}
+						{onChange}
+						{onUpload}
+						{onWebSearchToggle}
+						on:submit={(e) => {
+							dispatch('submit', e.detail);
+						}}
+					/>
+				{/if}
 			</div>
 		</div>
 	</div>

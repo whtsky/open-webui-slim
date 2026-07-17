@@ -34,7 +34,6 @@
 	import UserStatusModal from './UserStatusModal.svelte';
 	import Emoji from '$lib/components/common/Emoji.svelte';
 	import XMark from '$lib/components/icons/XMark.svelte';
-	import Note from '$lib/components/icons/Note.svelte';
 	import Pin from '$lib/components/icons/Pin.svelte';
 	import PinSlash from '$lib/components/icons/PinSlash.svelte';
 	import { updateUserStatus, updateUserSettings } from '$lib/apis/users';
@@ -58,7 +57,7 @@
 
 	const dispatch = createEventDispatcher();
 
-	const DEFAULT_PINNED_ITEMS = ['notes', 'workspace'];
+	const DEFAULT_PINNED_ITEMS = ['workspace'];
 
 	$: pinnedItems = $settings?.pinnedMenuItems ?? DEFAULT_PINNED_ITEMS;
 
@@ -117,7 +116,6 @@
 	}}
 />
 
-<!-- svelte-ignore a11y-no-static-element-interactions -->
 <Dropdown bind:show onOpenChange={handleDropdownChange} {align}>
 	<slot />
 
@@ -302,7 +300,7 @@
 
 			<hr class=" border-gray-50/30 dark:border-gray-800/30 my-1 p-0" />
 
-			{#if $user?.role === 'admin' || $user?.permissions?.workspace?.models || $user?.permissions?.workspace?.knowledge || $user?.permissions?.workspace?.prompts || $user?.permissions?.workspace?.tools}
+			{#if $user?.role === 'admin' || $user?.permissions?.workspace?.models || $user?.permissions?.workspace?.knowledge || $user?.permissions?.workspace?.prompts || $user?.permissions?.workspace?.tools || $user?.permissions?.workspace?.skills}
 				<div class="flex items-center w-full">
 					<a
 						href="/workspace"
@@ -349,50 +347,6 @@
 								on:click|preventDefault|stopPropagation={() => togglePin('workspace')}
 							>
 								{#if isPinned('workspace')}
-									<PinSlash className="size-3.5" strokeWidth="1.5" />
-								{:else}
-									<Pin className="size-3.5" strokeWidth="1.5" />
-								{/if}
-							</button>
-						</Tooltip>
-					{/if}
-				</div>
-			{/if}
-
-			{#if ($config?.features?.enable_notes ?? false) && ($user?.role === 'admin' || ($user?.permissions?.features?.notes ?? true))}
-				<div class="flex items-center w-full">
-					<a
-						href="/notes"
-						draggable="false"
-						class="flex flex-1 rounded-xl py-1.5 px-3 hover:bg-gray-50 dark:hover:bg-gray-800 transition cursor-pointer select-none"
-						on:click={async (e) => {
-							if (e.metaKey || e.ctrlKey || e.shiftKey || e.button === 1) return;
-							e.preventDefault();
-							show = false;
-							goto('/notes');
-							if ($mobile) {
-								await tick();
-								showSidebar.set(false);
-							}
-						}}
-					>
-						<div class="self-center mr-3">
-							<Note className="size-5" strokeWidth="1.5" />
-						</div>
-						<div class="self-center truncate">{$i18n.t('Notes')}</div>
-					</a>
-					{#if shiftKey}
-						<Tooltip
-							content={isPinned('notes')
-								? $i18n.t('Unpin from Sidebar')
-								: $i18n.t('Pin to Sidebar')}
-						>
-							<button
-								type="button"
-								class="p-1 mr-1 rounded-lg hover:bg-gray-100 dark:hover:bg-gray-700 transition"
-								on:click|preventDefault|stopPropagation={() => togglePin('notes')}
-							>
-								{#if isPinned('notes')}
 									<PinSlash className="size-3.5" strokeWidth="1.5" />
 								{:else}
 									<Pin className="size-3.5" strokeWidth="1.5" />
@@ -513,50 +467,6 @@
 				</div>
 			{/if}
 
-			{#if role === 'admin'}
-				<div class="flex items-center w-full">
-					<a
-						href="/playground"
-						draggable="false"
-						class="flex flex-1 rounded-xl py-1.5 px-3 hover:bg-gray-50 dark:hover:bg-gray-800 transition cursor-pointer select-none"
-						on:click={async (e) => {
-							if (e.metaKey || e.ctrlKey || e.shiftKey || e.button === 1) return;
-							e.preventDefault();
-							show = false;
-							goto('/playground');
-							if ($mobile) {
-								await tick();
-								showSidebar.set(false);
-							}
-						}}
-					>
-						<div class="self-center mr-3">
-							<Code className="size-5" strokeWidth="1.5" />
-						</div>
-						<div class="self-center truncate">{$i18n.t('Playground')}</div>
-					</a>
-					{#if shiftKey}
-						<Tooltip
-							content={isPinned('playground')
-								? $i18n.t('Unpin from Sidebar')
-								: $i18n.t('Pin to Sidebar')}
-						>
-							<button
-								type="button"
-								class="p-1 mr-1 rounded-lg hover:bg-gray-100 dark:hover:bg-gray-700 transition"
-								on:click|preventDefault|stopPropagation={() => togglePin('playground')}
-							>
-								{#if isPinned('playground')}
-									<PinSlash className="size-3.5" strokeWidth="1.5" />
-								{:else}
-									<Pin className="size-3.5" strokeWidth="1.5" />
-								{/if}
-							</button>
-						</Tooltip>
-					{/if}
-				</div>
-			{/if}
-
 			{#if help}
 				<hr class=" border-gray-50/30 dark:border-gray-800/30 my-1 p-0" />
 
@@ -614,7 +524,7 @@
 					<div class=" self-center mr-3">
 						<Keyboard className="size-5" />
 					</div>
-					<div class=" self-center truncate">{$i18n.t('Keyboard shortcuts')}</div>
+					<div class=" self-center truncate">{$i18n.t('Keyboard Shortcuts')}</div>
 				</button>
 			{/if}
 

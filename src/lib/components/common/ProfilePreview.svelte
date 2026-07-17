@@ -27,5 +27,5 @@
 		</button>
 	</LinkPreview.Trigger>
 
-	<UserStatusLinkPreview id={user?.id} {side} {align} {sideOffset} />
+	<UserStatusLinkPreview id={user?.id} {openPreview} {side} {align} {sideOffset} />
 </LinkPreview.Root>

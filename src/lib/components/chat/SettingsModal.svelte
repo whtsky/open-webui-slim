@@ -107,7 +107,6 @@
 				'autochattags',
 				'autocopyresponsetoclipboard',
 				'autotitle',
-				'beta',
 				'call',
 				'chat background image',
 				'chat bubble ui',
@@ -235,9 +234,6 @@
 				'manage tools',
 				'manage tool servers',
 				'managetoolservers',
-				'open terminal',
-				'openterminal',
-				'terminal',
 				'settings'
 			]
 		},

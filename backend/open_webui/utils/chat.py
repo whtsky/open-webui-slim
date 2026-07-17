@@ -1,47 +1,32 @@
-import time
+import asyncio
+import json
 import logging
 import sys
-
-from aiocache import cached
-from typing import Any, Optional
-import random
-import json
-
 import uuid
-import asyncio
+from typing import Any
 
-from fastapi import HTTPException, Request, status
-from starlette.responses import Response, StreamingResponse, JSONResponse
-
-
-from open_webui.models.users import UserModel
-
-from open_webui.socket.main import (
-    sio,
-    get_event_call,
-    get_event_emitter,
-)
+from fastapi import HTTPException, Request
+from open_webui.env import BYPASS_MODEL_ACCESS_CONTROL, GLOBAL_LOG_LEVEL
 from open_webui.functions import generate_function_chat_completion
-
+from open_webui.models.functions import Functions
+from open_webui.models.users import UserModel
 from open_webui.routers.openai import (
     generate_chat_completion as generate_openai_chat_completion,
 )
-
 from open_webui.routers.pipelines import (
-    process_pipeline_inlet_filter,
     process_pipeline_outlet_filter,
 )
-
-from open_webui.models.functions import Functions
-from open_webui.models.models import Models
-
-from open_webui.utils.models import get_all_models, check_model_access
+from open_webui.socket.main import (
+    get_event_call,
+    get_event_emitter,
+    sio,
+)
 from open_webui.utils.filter import (
     get_sorted_filter_ids,
     process_filter_functions,
 )
-
-from open_webui.env import GLOBAL_LOG_LEVEL, BYPASS_MODEL_ACCESS_CONTROL
+from open_webui.utils.models import check_model_access, get_all_models
+from starlette.responses import StreamingResponse
 
 logging.basicConfig(stream=sys.stdout, level=GLOBAL_LOG_LEVEL)
 log = logging.getLogger(__name__)
@@ -64,6 +49,11 @@ async def generate_direct_chat_completion(
     request_id = str(uuid.uuid4())  # Generate a unique request ID
 
     event_caller = await get_event_call(metadata)
+    if event_caller is None:
+        raise Exception(
+            'Direct connection requires an active WebSocket session; '
+            'cannot generate completion in this context (e.g. background task).'
+        )
 
     channel = f'{user_id}:{session_id}:{request_id}'
     logging.info(f'WebSocket channel: {channel}')
@@ -120,7 +110,7 @@ async def generate_direct_chat_completion(
             async def background():
                 try:
                     del sio.handlers['/'][channel]
-                except Exception as e:
+                except Exception:
                     pass
 
             # Return the streaming response
@@ -157,9 +147,9 @@ async def generate_chat_completion(
     if BYPASS_MODEL_ACCESS_CONTROL:
         bypass_filter = True
 
-    # Propagate bypass_filter via request.state so that downstream route
-    # handlers (openai/ollama) can read it without exposing it as a query param.
+    # Propagate internal bypass flags without exposing them as query parameters.
     request.state.bypass_filter = bypass_filter
+    request.state.bypass_system_prompt = bypass_system_prompt
 
     if hasattr(request.state, 'metadata'):
         if 'metadata' not in form_data:
@@ -171,10 +161,14 @@ async def generate_chat_completion(
             }
 
     if getattr(request.state, 'direct', False) and hasattr(request.state, 'model'):
+        # Merge the direct connection model into server models so that
+        # task functions (title, tags, etc.) can resolve a server-side
+        # task model while still having the direct model available.
         models = {
+            **request.app.state.MODELS,
             request.state.model['id']: request.state.model,
         }
-        log.debug(f'direct connection to model: {models}')
+        log.debug(f'direct connection to model: {request.state.model["id"]}')
     else:
         models = request.app.state.MODELS
 
@@ -184,7 +178,7 @@ async def generate_chat_completion(
 
     model = models[model_id]
 
-    if getattr(request.state, 'direct', False):
+    if getattr(request.state, 'direct', False) and model_id == getattr(request.state, 'model', {}).get('id'):
         return await generate_direct_chat_completion(request, form_data, user=user, models=models)
     else:
         # Check if user has access to the model
@@ -194,74 +188,6 @@ async def generate_chat_completion(
             except Exception as e:
                 raise e
 
-        # Arena model — sub-model was already resolved by process_chat_payload.
-        # Inject selected_model_id into the response for the frontend.
-        metadata = form_data.get('metadata', {})
-        selected_model_id = metadata.pop('selected_model_id', None)
-        # Also clear from request.state.metadata to prevent the merge at
-        # lines 177-179 from re-adding it on the recursive call.
-        if hasattr(request.state, 'metadata'):
-            request.state.metadata.pop('selected_model_id', None)
-
-        # Fallback: if generate_chat_completion is called with an arena model
-        # from a path that did NOT go through process_chat_payload (e.g.,
-        # background tasks for title/follow-up/tags generation), resolve now.
-        if not selected_model_id and model.get('owned_by') == 'arena':
-            model_ids = model.get('info', {}).get('meta', {}).get('model_ids')
-            filter_mode = model.get('info', {}).get('meta', {}).get('filter_mode')
-            if model_ids and filter_mode == 'exclude':
-                model_ids = [
-                    available_model['id']
-                    for available_model in list(request.app.state.MODELS.values())
-                    if available_model.get('owned_by') != 'arena' and available_model['id'] not in model_ids
-                ]
-
-            if isinstance(model_ids, list) and model_ids:
-                selected_model_id = random.choice(model_ids)
-            else:
-                model_ids = [
-                    available_model['id']
-                    for available_model in list(request.app.state.MODELS.values())
-                    if available_model.get('owned_by') != 'arena'
-                ]
-                selected_model_id = random.choice(model_ids)
-
-            form_data['model'] = selected_model_id
-
-        if selected_model_id:
-            if form_data.get('stream') == True:
-
-                async def stream_wrapper(stream):
-                    yield f'data: {json.dumps({"selected_model_id": selected_model_id})}\n\n'
-                    async for chunk in stream:
-                        yield chunk
-
-                response = await generate_chat_completion(
-                    request,
-                    form_data,
-                    user,
-                    bypass_filter=True,
-                    bypass_system_prompt=bypass_system_prompt,
-                )
-                return StreamingResponse(
-                    stream_wrapper(response.body_iterator),
-                    media_type='text/event-stream',
-                    background=response.background,
-                )
-            else:
-                return {
-                    **(
-                        await generate_chat_completion(
-                            request,
-                            form_data,
-                            user,
-                            bypass_filter=True,
-                            bypass_system_prompt=bypass_system_prompt,
-                        )
-                    ),
-                    'selected_model_id': selected_model_id,
-                }
-
         if model.get('pipe'):
             # Below does not require bypass_filter because this is the only route the uses this function and it is already bypassing the filter
             return await generate_function_chat_completion(request, form_data, user=user, models=models)
@@ -269,7 +195,6 @@ async def generate_chat_completion(
             request=request,
             form_data=form_data,
             user=user,
-            bypass_system_prompt=bypass_system_prompt,
         )
 
 
@@ -282,6 +207,7 @@ async def chat_completed(request: Request, form_data: dict, user: Any):
 
     if getattr(request.state, 'direct', False) and hasattr(request.state, 'model'):
         models = {
+            **request.app.state.MODELS,
             request.state.model['id']: request.state.model,
         }
     else:

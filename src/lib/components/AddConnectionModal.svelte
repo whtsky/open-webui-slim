@@ -32,9 +32,13 @@
 	let key = '';
 	let auth_type = 'bearer';
 
-	let azure = false;
+	let provider = '';
 	$: azure =
-		(url.includes('azure.') || url.includes('cognitive.microsoft.com')) && !direct ? true : false;
+		provider === 'azure' ||
+		((url.includes('azure.') || url.includes('cognitive.microsoft.com')) &&
+			!direct &&
+			provider === '' &&
+			!/\/openai\/v1(\/|$)/.test(url));
 
 	let prefixId = '';
 	let enable = true;
@@ -78,7 +82,8 @@
 				key,
 				config: {
 					auth_type,
-					azure: azure,
+					...(provider ? { provider } : {}),
+					...(azure ? { azure: true } : {}),
 					api_version: apiVersion,
 					...(_headers ? { headers: _headers } : {})
 				}
@@ -93,9 +98,7 @@
 		}
 	};
 
-	const verifyHandler = () => {
-		verifyOpenAIHandler();
-	};
+	const verifyHandler = () => verifyOpenAIHandler();
 
 	const addModelHandler = () => {
 		if (modelId) {
@@ -162,7 +165,9 @@
 				connection_type: 'external',
 				auth_type,
 				headers: headers ? JSON.parse(headers) : undefined,
-				...(azure ? { azure: true, api_version: apiVersion } : {}),
+				...(provider ? { provider } : {}),
+				...(azure ? { azure: true } : {}),
+				...(azure ? { api_version: apiVersion } : {}),
 				...(apiType ? { api_type: apiType } : {})
 			}
 		};
@@ -194,7 +199,8 @@
 			tags = connection.config?.tags ?? [];
 			prefixId = connection.config?.prefix_id ?? '';
 			modelIds = connection.config?.model_ids ?? [];
-			azure = connection.config?.azure ?? false;
+
+			provider = connection.config?.provider ?? (connection.config?.azure ? 'azure' : '');
 			apiVersion = connection.config?.api_version ?? '';
 			apiType = connection.config?.api_type ?? '';
 		}
@@ -325,12 +331,11 @@
 										>
 											<option value="none">{$i18n.t('None')}</option>
 											<option value="bearer">{$i18n.t('Bearer')}</option>
+
 											<option value="session">{$i18n.t('Session')}</option>
 											{#if !direct}
 												<option value="system_oauth">{$i18n.t('OAuth')}</option>
-												{#if azure}
-													<option value="microsoft_entra_id">{$i18n.t('Entra ID')}</option>
-												{/if}
+												<option value="microsoft_entra_id">{$i18n.t('Entra ID')}</option>
 											{/if}
 										</select>
 									</div>
@@ -432,22 +437,22 @@
 						{#if !direct}
 							<div class="flex flex-row justify-between items-center w-full mt-2">
 								<label
-									for="prefix-id-input"
+									for="provider-select"
 									class={`mb-0.5 text-xs text-gray-500
 								${($settings?.highContrastMode ?? false) ? 'text-gray-800 dark:text-gray-100' : ''}`}
-									>{$i18n.t('Provider Type')}</label
+									>{$i18n.t('Provider')}</label
 								>
 
 								<div>
-									<button
-										on:click={() => {
-											azure = !azure;
-										}}
-										type="button"
-										class=" text-xs text-gray-700 dark:text-gray-300"
+									<select
+										id="provider-select"
+										bind:value={provider}
+										class="text-xs text-gray-700 dark:text-gray-300 bg-transparent outline-hidden"
 									>
-										{azure ? $i18n.t('Azure OpenAI') : $i18n.t('OpenAI')}
-									</button>
+										<option value="">{$i18n.t('Default')}</option>
+										<option value="azure">{$i18n.t('Azure OpenAI')}</option>
+										<option value="llama.cpp">{$i18n.t('llama.cpp')}</option>
+									</select>
 								</div>
 							</div>
 						{/if}
@@ -458,7 +463,7 @@
 									<label
 										for="api-version-input"
 										class={`mb-0.5 text-xs text-gray-500
-								${($settings?.highContrastMode ?? false) ? 'text-gray-800 dark:text-gray-100' : ''}`}
+										${($settings?.highContrastMode ?? false) ? 'text-gray-800 dark:text-gray-100' : ''}`}
 										>{$i18n.t('API Version')}</label
 									>
 
@@ -554,12 +559,12 @@
 									class={`text-gray-500 text-xs text-center py-2 px-10
 								${($settings?.highContrastMode ?? false) ? 'text-gray-800 dark:text-gray-100' : ''}`}
 								>
-								{#if azure}
-									{$i18n.t('Deployment names are required for Azure OpenAI')}
-									<!-- {$i18n.t('Leave empty to include all models from "{{url}}" endpoint', {
-										url: `${url}/openai/deployments`
-									})} -->
-								{:else}
+									{#if azure}
+										{$i18n.t('Deployment names are required for Azure OpenAI')}
+										<!-- {$i18n.t('Leave empty to include all models from "{{url}}" endpoint', {
+											url: `${url}/openai/deployments`
+										})} -->
+									{:else}
 										{$i18n.t('Leave empty to include all models from "{{url}}/models" endpoint', {
 											url: url
 										})}

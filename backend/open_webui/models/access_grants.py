@@ -3,13 +3,10 @@ import time
 import uuid
 from typing import Optional
 
-from sqlalchemy import select, delete
-from sqlalchemy.ext.asyncio import AsyncSession
 from open_webui.internal.db import Base, get_async_db_context
-
 from pydantic import BaseModel, ConfigDict
-from sqlalchemy import BigInteger, Column, Text, UniqueConstraint, or_, and_
-from sqlalchemy.dialects.postgresql import JSONB
+from sqlalchemy import BigInteger, Column, Text, UniqueConstraint, and_, delete, or_, select
+from sqlalchemy.ext.asyncio import AsyncSession
 
 log = logging.getLogger(__name__)
 
@@ -23,7 +20,7 @@ class AccessGrant(Base):
     __tablename__ = 'access_grant'
 
     id = Column(Text, primary_key=True)
-    resource_type = Column(Text, nullable=False)  # "knowledge", "model", "prompt", "tool", "note", "channel", "file"
+    resource_type = Column(Text, nullable=False)  # "knowledge", "model", "prompt", "tool", "file", etc.
     resource_id = Column(Text, nullable=False)
     principal_type = Column(Text, nullable=False)  # "user" or "group"
     principal_id = Column(Text, nullable=False)  # user_id, group_id, or "*" (wildcard for public)
@@ -623,8 +620,8 @@ class AccessGrantsTable:
         Get all users who have the specified permission on a resource.
         Returns a list of UserModel instances.
         """
-        from open_webui.models.users import Users, UserModel
         from open_webui.models.groups import Groups
+        from open_webui.models.users import Users
 
         async with get_async_db_context(db) as db:
             result = await db.execute(
@@ -719,7 +716,6 @@ class AccessGrantsTable:
 
         # LEFT JOIN access_grant and filter
         # We use a subquery approach to avoid duplicates from multiple matching grants
-        from sqlalchemy import exists as sa_exists
 
         grant_exists = (
             select(AccessGrant.id)
@@ -784,8 +780,6 @@ class AccessGrantsTable:
         """
         group_ids = filter.get('group_ids', [])
         user_id = filter.get('user_id')
-
-        from sqlalchemy import exists as sa_exists
 
         # Has read grant (not public)
         read_grant_exists = (

@@ -1,6 +1,91 @@
 import { WEBUI_API_BASE_URL } from '$lib/constants';
 import { getTimeRange } from '$lib/utils';
 
+const readNdjson = async (res: Response): Promise<object[]> => {
+	const reader = res.body?.getReader();
+	if (!reader) {
+		throw new Error('Response body is not readable');
+	}
+
+	const decoder = new TextDecoder();
+	const items: object[] = [];
+	let buffer = '';
+
+	while (true) {
+		const { done, value } = await reader.read();
+		if (done) break;
+
+		buffer += decoder.decode(value, { stream: true });
+		const lines = buffer.split('\n');
+		buffer = lines.pop() ?? '';
+		for (const line of lines) {
+			const trimmed = line.trim();
+			if (trimmed) items.push(JSON.parse(trimmed));
+		}
+	}
+
+	const remaining = buffer.trim();
+	if (remaining) items.push(JSON.parse(remaining));
+	return items;
+};
+
+export const getChatConfig = async (token: string) => {
+	let error = null;
+
+	const res = await fetch(`${WEBUI_API_BASE_URL}/chats/config`, {
+		method: 'GET',
+		headers: {
+			Accept: 'application/json',
+			'Content-Type': 'application/json',
+			...(token && { authorization: `Bearer ${token}` })
+		}
+	})
+		.then(async (res) => {
+			if (!res.ok) throw await res.json();
+			return res.json();
+		})
+		.catch((err) => {
+			error = err;
+			console.error(err);
+			return null;
+		});
+
+	if (error) {
+		throw error;
+	}
+
+	return res;
+};
+
+export const updateChatConfig = async (token: string, config: object) => {
+	let error = null;
+
+	const res = await fetch(`${WEBUI_API_BASE_URL}/chats/config`, {
+		method: 'POST',
+		headers: {
+			Accept: 'application/json',
+			'Content-Type': 'application/json',
+			...(token && { authorization: `Bearer ${token}` })
+		},
+		body: JSON.stringify(config)
+	})
+		.then(async (res) => {
+			if (!res.ok) throw await res.json();
+			return res.json();
+		})
+		.catch((err) => {
+			error = err;
+			console.error(err);
+			return null;
+		});
+
+	if (error) {
+		throw error;
+	}
+
+	return res;
+};
+
 export const createNewChat = async (token: string, chat: object, folderId: string | null) => {
 	let error = null;
 
@@ -38,6 +123,38 @@ export const unarchiveAllChats = async (token: string) => {
 
 	const res = await fetch(`${WEBUI_API_BASE_URL}/chats/unarchive/all`, {
 		method: 'POST',
+		headers: {
+			Accept: 'application/json',
+			'Content-Type': 'application/json',
+			...(token && { authorization: `Bearer ${token}` })
+		}
+	})
+		.then(async (res) => {
+			if (!res.ok) throw await res.json();
+			return res.json();
+		})
+		.then((json) => {
+			return json;
+		})
+		.catch((err) => {
+			error = err.detail;
+
+			console.error(err);
+			return null;
+		});
+
+	if (error) {
+		throw error;
+	}
+
+	return res;
+};
+
+export const unshareAllChats = async (token: string) => {
+	let error = null;
+
+	const res = await fetch(`${WEBUI_API_BASE_URL}/chats/share/all`, {
+		method: 'DELETE',
 		headers: {
 			Accept: 'application/json',
 			'Content-Type': 'application/json',
@@ -255,6 +372,34 @@ export const getArchivedChatList = async (
 	}));
 };
 
+export const getArchivedChatCount = async (token: string = '') => {
+	let error = null;
+
+	const res = await fetch(`${WEBUI_API_BASE_URL}/chats/archived/count`, {
+		method: 'GET',
+		headers: {
+			Accept: 'application/json',
+			'Content-Type': 'application/json',
+			...(token && { authorization: `Bearer ${token}` })
+		}
+	})
+		.then(async (res) => {
+			if (!res.ok) throw await res.json();
+			return res.json();
+		})
+		.catch((err) => {
+			error = err;
+			console.error(err);
+			return null;
+		});
+
+	if (error) {
+		throw error;
+	}
+
+	return res;
+};
+
 export const getSharedChatList = async (token: string = '', page: number = 1, filter?: object) => {
 	let error = null;
 
@@ -301,34 +446,21 @@ export const getSharedChatList = async (token: string = '', page: number = 1, fi
 };
 
 export const getAllChats = async (token: string) => {
-	let error = null;
-
 	const res = await fetch(`${WEBUI_API_BASE_URL}/chats/all`, {
 		method: 'GET',
 		headers: {
-			Accept: 'application/json',
-			'Content-Type': 'application/json',
+			Accept: 'application/x-ndjson',
 			...(token && { authorization: `Bearer ${token}` })
 		}
-	})
-		.then(async (res) => {
-			if (!res.ok) throw await res.json();
-			return res.json();
-		})
-		.then((json) => {
-			return json;
-		})
-		.catch((err) => {
-			error = err;
-			console.error(err);
-			return null;
-		});
+	});
 
-	if (error) {
-		throw error;
+	if (!res.ok) {
+		const err = await res.json();
+		console.error(err);
+		throw err;
 	}
 
-	return res;
+	return readNdjson(res);
 };
 
 export const getChatListBySearchText = async (token: string, text: string, page: number = 1) => {
@@ -370,34 +502,21 @@ export const getChatListBySearchText = async (token: string, text: string, page:
 };
 
 export const getChatsByFolderId = async (token: string, folderId: string) => {
-	let error = null;
-
 	const res = await fetch(`${WEBUI_API_BASE_URL}/chats/folder/${folderId}`, {
 		method: 'GET',
 		headers: {
-			Accept: 'application/json',
-			'Content-Type': 'application/json',
+			Accept: 'application/x-ndjson',
 			...(token && { authorization: `Bearer ${token}` })
 		}
-	})
-		.then(async (res) => {
-			if (!res.ok) throw await res.json();
-			return res.json();
-		})
-		.then((json) => {
-			return json;
-		})
-		.catch((err) => {
-			error = err;
-			console.error(err);
-			return null;
-		});
+	});
 
-	if (error) {
+	if (!res.ok) {
+		const error = await res.json();
+		console.error(error);
 		throw error;
 	}
 
-	return res;
+	return readNdjson(res);
 };
 
 export const getChatListByFolderId = async (token: string, folderId: string, page: number = 1) => {
@@ -440,34 +559,21 @@ export const getChatListByFolderId = async (token: string, folderId: string, pag
 };
 
 export const getAllArchivedChats = async (token: string) => {
-	let error = null;
-
 	const res = await fetch(`${WEBUI_API_BASE_URL}/chats/all/archived`, {
 		method: 'GET',
 		headers: {
-			Accept: 'application/json',
-			'Content-Type': 'application/json',
+			Accept: 'application/x-ndjson',
 			...(token && { authorization: `Bearer ${token}` })
 		}
-	})
-		.then(async (res) => {
-			if (!res.ok) throw await res.json();
-			return res.json();
-		})
-		.then((json) => {
-			return json;
-		})
-		.catch((err) => {
-			error = err;
-			console.error(err);
-			return null;
-		});
+	});
 
-	if (error) {
+	if (!res.ok) {
+		const error = await res.json();
+		console.error(error);
 		throw error;
 	}
 
-	return res;
+	return readNdjson(res);
 };
 
 export const getAllUserChats = async (token: string) => {
@@ -1055,6 +1161,34 @@ export const updateChatById = async (token: string, id: string, chat: object) =>
 	return res;
 };
 
+export const deleteChatMessageById = async (token: string, id: string, messageId: string) => {
+	let error = null;
+
+	const res = await fetch(`${WEBUI_API_BASE_URL}/chats/${id}/messages/${messageId}`, {
+		method: 'DELETE',
+		headers: {
+			Accept: 'application/json',
+			'Content-Type': 'application/json',
+			...(token && { authorization: `Bearer ${token}` })
+		}
+	})
+		.then(async (res) => {
+			if (!res.ok) throw await res.json();
+			return res.json();
+		})
+		.catch((err) => {
+			error = err;
+			console.error(err);
+			return null;
+		});
+
+	if (error) {
+		throw error;
+	}
+
+	return res;
+};
+
 export const deleteChatById = async (token: string, id: string) => {
 	let error = null;
 
@@ -1166,37 +1300,6 @@ export const deleteTagById = async (token: string, id: string, tagName: string) 
 		body: JSON.stringify({
 			name: tagName
 		})
-	})
-		.then(async (res) => {
-			if (!res.ok) throw await res.json();
-			return res.json();
-		})
-		.then((json) => {
-			return json;
-		})
-		.catch((err) => {
-			error = err;
-
-			console.error(err);
-			return null;
-		});
-
-	if (error) {
-		throw error;
-	}
-
-	return res;
-};
-export const deleteTagsById = async (token: string, id: string) => {
-	let error = null;
-
-	const res = await fetch(`${WEBUI_API_BASE_URL}/chats/${id}/tags/all`, {
-		method: 'DELETE',
-		headers: {
-			Accept: 'application/json',
-			'Content-Type': 'application/json',
-			...(token && { authorization: `Bearer ${token}` })
-		}
 	})
 		.then(async (res) => {
 			if (!res.ok) throw await res.json();

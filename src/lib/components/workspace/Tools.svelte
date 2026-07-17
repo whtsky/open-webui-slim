@@ -62,12 +62,12 @@
 
 	let showImportModal = false;
 
-	$: if (query !== undefined) {
+	const handleSearchInput = () => {
 		clearTimeout(searchDebounceTimer);
 		searchDebounceTimer = setTimeout(() => {
 			setFilteredItems();
 		}, 300);
-	}
+	};
 
 	$: if (tools && viewOption !== undefined) {
 		setFilteredItems();
@@ -159,13 +159,13 @@
 
 		window.addEventListener('keydown', onKeyDown);
 		window.addEventListener('keyup', onKeyUp);
-		window.addEventListener('blur-sm', onBlur);
+		window.addEventListener('blur', onBlur);
 
 		return () => {
 			clearTimeout(searchDebounceTimer);
 			window.removeEventListener('keydown', onKeyDown);
 			window.removeEventListener('keyup', onKeyUp);
-			window.removeEventListener('blur-sm', onBlur);
+			window.removeEventListener('blur', onBlur);
 		};
 	});
 
@@ -300,6 +300,7 @@
 				<input
 					class=" w-full text-sm pr-4 py-1 rounded-r-xl outline-hidden bg-transparent"
 					bind:value={query}
+					on:input={handleSearchInput}
 					aria-label={$i18n.t('Search Tools')}
 					placeholder={$i18n.t('Search Tools')}
 				/>
@@ -310,6 +311,7 @@
 							aria-label={$i18n.t('Clear search')}
 							on:click={() => {
 								query = '';
+								handleSearchInput();
 							}}
 						>
 							<XMark className="size-3" strokeWidth="2" />

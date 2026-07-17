@@ -9,6 +9,7 @@
 	} from '$lib/utils';
 
 	import 'highlight.js/styles/github-dark.min.css';
+	import equal from 'fast-deep-equal';
 
 	import CodeEditor from '$lib/components/common/CodeEditor.svelte';
 	import SvgPanZoom from '$lib/components/common/SVGPanZoom.svelte';
@@ -26,7 +27,6 @@
 	export let onPreview = (e) => {};
 
 	export let save = false;
-	export let run = true;
 	export let preview = false;
 	export let collapsed = false;
 
@@ -94,8 +94,6 @@
 
 	const render = async () => {
 		onUpdate(token);
-		renderError = null;
-
 		if (lang === 'mermaid' && (token?.raw ?? '').slice(-4).includes('```')) {
 			try {
 				renderHTML = await renderMermaid(code);
@@ -110,7 +108,7 @@
 			(token?.raw ?? '').slice(-4).includes('```')
 		) {
 			try {
-				renderHTML = await renderVegaVisualization(code);
+				renderHTML = await renderVegaVisualization(code, lang);
 			} catch (error) {
 				console.error('Failed to render Vega visualization:', error);
 				const errorMsg = error instanceof Error ? error.message : String(error);
@@ -123,7 +121,7 @@
 	$: if (token) {
 		if (token.text !== _token?.text || token.raw !== _token?.raw) {
 			_token = token;
-		} else if (JSON.stringify(token) !== JSON.stringify(_token)) {
+		} else if (!equal(token, _token)) {
 			_token = token;
 		}
 	}
@@ -165,7 +163,7 @@
 			{/if}
 		{:else}
 			<div
-				class="sticky {stickyButtonsClassName} left-0 right-0 py-1.5 px-3 gap-2 flex items-center justify-end w-full z-10 text-xs text-black dark:text-white bg-white dark:bg-black rounded-t-2xl"
+				class="sticky {stickyButtonsClassName} left-0 right-0 py-1.5 px-3.5 gap-2 flex items-center justify-end w-full z-10 text-xs text-black dark:text-white bg-white dark:bg-black rounded-t-2xl"
 			>
 				<div class="flex-1 truncate">
 					<Tooltip content={lang} placement="top-start">
@@ -241,8 +239,10 @@
 							class=" hljs p-4 px-5 overflow-x-auto"
 							style="border-top-left-radius: 0px; border-top-right-radius: 0px;"><code
 								class="language-{lang} rounded-t-none whitespace-pre text-sm"
-								>{@html hljs.highlightAuto(code, hljs.getLanguage(lang)?.aliases).value ||
-									code}</code
+								>{#if lang && hljs.getLanguage(lang)}{@html hljs.highlight(code, {
+										language: lang,
+										ignoreIllegals: true
+									}).value}{:else}{code}{/if}</code
 							></pre>
 					{/if}
 				{:else}

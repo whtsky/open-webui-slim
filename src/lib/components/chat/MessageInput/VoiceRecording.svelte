@@ -1,7 +1,7 @@
 <script lang="ts">
 	import { toast } from 'svelte-sonner';
 	import { tick, getContext, onMount, onDestroy } from 'svelte';
-	import { config, settings } from '$lib/stores';
+	import { settings } from '$lib/stores';
 	import { blobToFile, calculateSHA256, extractCurlyBraceWords } from '$lib/utils';
 
 	import { transcribeAudio } from '$lib/apis/audio';
@@ -31,8 +31,6 @@
 
 	let durationSeconds = 0;
 	let durationCounter = null;
-
-	let transcription = '';
 
 	const startDurationCounter = () => {
 		durationCounter = setInterval(() => {
@@ -87,7 +85,6 @@
 	};
 
 	let stream;
-	let speechRecognition;
 
 	let mediaRecorder;
 	let audioChunks = [];
@@ -178,11 +175,6 @@
 		const file = blobToFile(audioBlob, `Recording-${dayjs().format('L LT')}.${ext}`);
 
 		if (transcribe) {
-			if ($config.audio.stt.engine === 'web' || ($settings?.audio?.stt?.engine ?? '') === 'web') {
-				// with web stt, we don't need to send the file to the server
-				return;
-			}
-
 			const res = await transcribeAudio(
 				localStorage.token,
 				file,
@@ -238,7 +230,13 @@
 			return;
 		}
 
-		const mineTypes = ['audio/webm; codecs=opus', 'audio/mp4'];
+		const mineTypes = [
+			'audio/webm; codecs=opus',
+			'audio/webm',
+			'audio/ogg; codecs=opus',
+			'audio/mp4',
+			'audio/wav'
+		];
 
 		mediaRecorder = new MediaRecorder(stream, {
 			mimeType: mineTypes.find((type) => MediaRecorder.isTypeSupported(type))
@@ -290,79 +288,12 @@
 			recording = false;
 			return;
 		}
-
-		if (transcribe) {
-			if ($config.audio.stt.engine === 'web' || ($settings?.audio?.stt?.engine ?? '') === 'web') {
-				if ('SpeechRecognition' in window || 'webkitSpeechRecognition' in window) {
-					// Create a SpeechRecognition object
-					speechRecognition = new (window.SpeechRecognition || window.webkitSpeechRecognition)();
-
-					// Set continuous to true for continuous recognition
-					speechRecognition.continuous = true;
-
-					// Set the timeout for turning off the recognition after inactivity (in milliseconds)
-					const inactivityTimeout = 2000; // 3 seconds
-
-					let timeoutId;
-					// Start recognition
-					speechRecognition.start();
-
-					// Event triggered when speech is recognized
-					speechRecognition.onresult = async (event) => {
-						// Clear the inactivity timeout
-						clearTimeout(timeoutId);
-
-						// Handle recognized speech
-						console.log(event);
-						const transcript = event.results[Object.keys(event.results).length - 1][0].transcript;
-
-						transcription = `${transcription}${transcript}`;
-
-						await tick();
-						document.getElementById('chat-input')?.focus();
-
-						// Restart the inactivity timeout
-						timeoutId = setTimeout(() => {
-							console.log('Speech recognition turned off due to inactivity.');
-							speechRecognition.stop();
-						}, inactivityTimeout);
-					};
-
-					// Event triggered when recognition is ended
-					speechRecognition.onend = function () {
-						// Restart recognition after it ends
-						console.log('recognition ended');
-
-						confirmRecording();
-						onConfirm({
-							text: transcription
-						});
-						confirmed = false;
-						loading = false;
-					};
-
-					// Event triggered when an error occurs
-					speechRecognition.onerror = function (event) {
-						console.log(event);
-						toast.error($i18n.t(`Speech recognition error: {{error}}`, { error: event.error }));
-						onCancel();
-
-						stopRecording();
-					};
-				}
-			}
-		}
 	};
 
 	const stopRecording = async () => {
 		if (recording && mediaRecorder) {
 			await mediaRecorder.stop();
 		}
-
-		if (speechRecognition) {
-			speechRecognition.stop();
-		}
-
 		await releaseWakeLock();
 
 		stopDurationCounter();

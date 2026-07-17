@@ -1,24 +1,28 @@
 <script lang="ts">
 	import { toast } from 'svelte-sonner';
 	import { onMount, getContext } from 'svelte';
-
-	const i18n = getContext('i18n');
+	import type { Writable } from 'svelte/store';
+	import type { i18n as i18nType } from 'i18next';
 
 	import Spinner from '$lib/components/common/Spinner.svelte';
 	import Tooltip from '$lib/components/common/Tooltip.svelte';
 	import Plus from '$lib/components/icons/Plus.svelte';
 	import Connection from '$lib/components/chat/Settings/Tools/Connection.svelte';
 	import AddToolServerModal from '$lib/components/AddToolServerModal.svelte';
-
+	import ExternalKnowledge from './ExternalKnowledge.svelte';
 	import { getToolServerConnections, setToolServerConnections } from '$lib/apis/configs';
+
+	const i18n = getContext<Writable<i18nType>>('i18n');
 
 	export let saveSettings: Function;
 
-	let servers = null;
+	type ToolServerConnection = any;
+
+	let servers: ToolServerConnection[] | null = null;
 	let showConnectionModal = false;
 
-	const addConnectionHandler = async (server) => {
-		servers = [...servers, server];
+	const addConnectionHandler = async (server: ToolServerConnection) => {
+		servers = [...(servers ?? []), server];
 		await updateHandler();
 	};
 
@@ -37,7 +41,7 @@
 
 	onMount(async () => {
 		const res = await getToolServerConnections(localStorage.token);
-		servers = res.TOOL_SERVER_CONNECTIONS;
+		servers = res.TOOL_SERVER_CONNECTIONS as ToolServerConnection[];
 	});
 </script>
 
@@ -49,17 +53,17 @@
 		updateHandler();
 	}}
 >
-	<div class="overflow-y-scroll scrollbar-hidden h-full">
+	<div class=" overflow-y-scroll scrollbar-hidden h-full">
 		{#if servers !== null}
 			<div class="">
 				<div class="mb-3">
-					<div class="mt-0.5 mb-2.5 text-base font-medium">{$i18n.t('General')}</div>
+					<div class=" mt-0.5 mb-2.5 text-base font-medium">{$i18n.t('Tools')}</div>
 
-					<hr class="border-gray-100/30 dark:border-gray-850/30 my-2" />
+					<hr class=" border-gray-100/30 dark:border-gray-850/30 my-2" />
 
 					<div class="mb-2.5 flex flex-col w-full justify-between">
 						<div class="flex justify-between items-center mb-0.5">
-							<div class="font-medium">{$i18n.t('Manage Tool Servers')}</div>
+							<div class="font-medium">{$i18n.t('External Tool Servers')}</div>
 
 							<Tooltip content={$i18n.t(`Add Connection`)}>
 								<button
@@ -75,21 +79,21 @@
 						</div>
 
 						<div class="flex flex-col gap-1">
-							{#each servers as server, idx}
+							{#each servers ?? [] as server, idx}
 								<Connection
 									bind:connection={server}
 									onSubmit={() => {
 										updateHandler();
 									}}
 									onDelete={() => {
-										servers = servers.filter((_, i) => i !== idx);
+										servers = (servers ?? []).filter((_, i) => i !== idx);
 										updateHandler();
 									}}
 								/>
 							{/each}
 						</div>
 
-						{#if servers.length === 0}
+						{#if (servers ?? []).length === 0}
 							<div class="text-xs text-gray-400 dark:text-gray-500">
 								{$i18n.t('No tool server connections configured.')}
 							</div>
@@ -101,6 +105,12 @@
 							</div>
 						</div>
 					</div>
+
+					<div class="mt-8 mb-2.5 text-base font-medium">{$i18n.t('Knowledge')}</div>
+
+					<hr class=" border-gray-100/30 dark:border-gray-850/30 my-2" />
+
+					<ExternalKnowledge />
 				</div>
 			</div>
 		{:else}

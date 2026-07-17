@@ -1,31 +1,36 @@
-import chromadb
 import logging
-from chromadb import Settings
-from chromadb.utils.batch_utils import create_batches
-
 from typing import Optional
 
+import chromadb
+from chromadb import Settings
+from chromadb.utils.batch_utils import create_batches
+from open_webui.config import (
+    CHROMA_CLIENT_AUTH_CREDENTIALS,
+    CHROMA_CLIENT_AUTH_PROVIDER,
+    CHROMA_DATABASE,
+    CHROMA_HTTP_HEADERS,
+    CHROMA_HTTP_HOST,
+    CHROMA_HTTP_PORT,
+    CHROMA_HTTP_SSL,
+    CHROMA_TENANT,
+)
 from open_webui.retrieval.vector.main import (
+    GetResult,
+    SearchResult,
     VectorDBBase,
     VectorItem,
-    SearchResult,
-    GetResult,
 )
 from open_webui.retrieval.vector.utils import process_metadata
 
-from open_webui.config import (
-    CHROMA_DATA_PATH,
-    CHROMA_HTTP_HOST,
-    CHROMA_HTTP_PORT,
-    CHROMA_HTTP_HEADERS,
-    CHROMA_HTTP_SSL,
-    CHROMA_TENANT,
-    CHROMA_DATABASE,
-    CHROMA_CLIENT_AUTH_PROVIDER,
-    CHROMA_CLIENT_AUTH_CREDENTIALS,
-)
-
 log = logging.getLogger(__name__)
+
+
+class _ExternalChromaRequired:
+    def __getattr__(self, name):
+        raise RuntimeError(
+            'Local Chroma is not available in Open WebUI Slim. '
+            'Set CHROMA_HTTP_HOST to an external Chroma server or select another external VECTOR_DB.'
+        )
 
 
 class ChromaClient(VectorDBBase):
@@ -39,7 +44,7 @@ class ChromaClient(VectorDBBase):
         if CHROMA_CLIENT_AUTH_CREDENTIALS is not None:
             settings_dict['chroma_client_auth_credentials'] = CHROMA_CLIENT_AUTH_CREDENTIALS
 
-        if CHROMA_HTTP_HOST != '':
+        if CHROMA_HTTP_HOST:
             self.client = chromadb.HttpClient(
                 host=CHROMA_HTTP_HOST,
                 port=CHROMA_HTTP_PORT,
@@ -50,16 +55,19 @@ class ChromaClient(VectorDBBase):
                 settings=Settings(**settings_dict),
             )
         else:
-            self.client = chromadb.PersistentClient(
-                path=CHROMA_DATA_PATH,
-                settings=Settings(**settings_dict),
-                tenant=CHROMA_TENANT,
-                database=CHROMA_DATABASE,
+            self.client = _ExternalChromaRequired()
+            log.warning(
+                'VECTOR_DB=chroma requires CHROMA_HTTP_HOST in Open WebUI Slim; '
+                'local embedded Chroma is intentionally unavailable.'
             )
 
     def has_collection(self, collection_name: str) -> bool:
         # Check if the collection exists based on the collection name.
-        collection_names = self.client.list_collections()
+        # chromadb's list_collections() returns Collection objects (1.x), so a
+        # bare `name in collections` membership test is always False — compare
+        # against the names. (hasattr guard tolerates versions that yield names.)
+        collections = self.client.list_collections()
+        collection_names = [c.name if hasattr(c, 'name') else c for c in collections]
         return collection_name in collection_names
 
     def delete_collection(self, collection_name: str):
@@ -98,7 +106,7 @@ class ChromaClient(VectorDBBase):
                     }
                 )
             return None
-        except Exception as e:
+        except Exception:
             return None
 
     def query(self, collection_name: str, filter: dict, limit: Optional[int] = None) -> Optional[GetResult]:
@@ -179,7 +187,7 @@ class ChromaClient(VectorDBBase):
                     collection.delete(ids=ids)
                 elif filter:
                     collection.delete(where=filter)
-        except Exception as e:
+        except Exception:
             # If collection doesn't exist, that's fine - nothing to delete
             log.debug(f'Attempted to delete from non-existent collection {collection_name}. Ignoring.')
             pass

@@ -44,7 +44,7 @@
 		builtin_tools: {
 			label: $i18n.t('Builtin Tools'),
 			description: $i18n.t(
-				'Automatically inject system tools in native function calling mode (e.g., timestamps, memory, chat history, notes, etc.)'
+				'Automatically inject system tools in native function calling mode (e.g., timestamps, memory, chat history, etc.)'
 			)
 		}
 	};

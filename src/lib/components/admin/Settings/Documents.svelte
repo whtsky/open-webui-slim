@@ -31,20 +31,16 @@
 
 	const i18n = getContext('i18n');
 
-	let updateEmbeddingModelLoading = false;
-	let updateRerankingModelLoading = false;
-
 	let showResetConfirm = false;
 	let showResetUploadDirConfirm = false;
 	let showReindexConfirm = false;
+	let showExternalDocumentLoaderHeadersHint = false;
 
 	let RAG_EMBEDDING_ENGINE = '';
 	let RAG_EMBEDDING_MODEL = '';
 	let RAG_EMBEDDING_BATCH_SIZE = 1;
 	let ENABLE_ASYNC_EMBEDDING = true;
 	let RAG_EMBEDDING_CONCURRENT_REQUESTS = 0;
-
-	let rerankingModel = '';
 
 	let OpenAIUrl = '';
 	let OpenAIKey = '';
@@ -64,20 +60,12 @@
 	let RAGConfig = null;
 
 	const embeddingModelUpdateHandler = async () => {
-		if (RAG_EMBEDDING_ENGINE === '' && RAG_EMBEDDING_MODEL.split('/').length - 1 > 1) {
-			toast.error(
-				$i18n.t(
-					'Model filesystem path detected. Model shortname is required for update, cannot continue.'
-				)
-			);
+		if (!['openai', 'azure_openai'].includes(RAG_EMBEDDING_ENGINE)) {
+			toast.error($i18n.t('Select an external embedding provider.'));
 			return;
 		}
-		if (RAG_EMBEDDING_ENGINE === 'openai' && RAG_EMBEDDING_MODEL === '') {
-			toast.error(
-				$i18n.t(
-					'Model filesystem path detected. Model shortname is required for update, cannot continue.'
-				)
-			);
+		if (RAG_EMBEDDING_MODEL === '') {
+			toast.error($i18n.t('Embedding model is required.'));
 			return;
 		}
 
@@ -97,7 +85,6 @@
 			RAG_EMBEDDING_CONCURRENT_REQUESTS
 		});
 
-		updateEmbeddingModelLoading = true;
 		const res = await updateEmbeddingConfig(localStorage.token, {
 			RAG_EMBEDDING_ENGINE: RAG_EMBEDDING_ENGINE,
 			RAG_EMBEDDING_MODEL: RAG_EMBEDDING_MODEL,
@@ -118,8 +105,6 @@
 			await setEmbeddingConfig();
 			return null;
 		});
-		updateEmbeddingModelLoading = false;
-
 		if (res) {
 			console.debug('embeddingModelUpdateHandler:', res);
 		}
@@ -132,6 +117,21 @@
 		) {
 			toast.error($i18n.t('External Document Loader URL required.'));
 			return;
+		}
+		if (
+			RAGConfig.CONTENT_EXTRACTION_ENGINE === 'external' &&
+			RAGConfig.EXTERNAL_DOCUMENT_LOADER_HEADERS
+		) {
+			try {
+				const headers = JSON.parse(RAGConfig.EXTERNAL_DOCUMENT_LOADER_HEADERS);
+				if (headers === null || typeof headers !== 'object' || Array.isArray(headers)) {
+					throw new Error('Headers must be a valid JSON object');
+				}
+				RAGConfig.EXTERNAL_DOCUMENT_LOADER_HEADERS = JSON.stringify(headers, null, 2);
+			} catch (error) {
+				toast.error($i18n.t('Headers must be a valid JSON object'));
+				return;
+			}
 		}
 		if (RAGConfig.CONTENT_EXTRACTION_ENGINE === 'tika' && RAGConfig.TIKA_SERVER_URL === '') {
 			toast.error($i18n.t('Tika Server URL required.'));
@@ -225,10 +225,18 @@
 				typeof RAGConfig.DOCLING_PARAMS === 'string' && RAGConfig.DOCLING_PARAMS.trim() !== ''
 					? JSON.parse(RAGConfig.DOCLING_PARAMS)
 					: {},
+			EXTERNAL_DOCUMENT_LOADER_HEADERS:
+				typeof RAGConfig.EXTERNAL_DOCUMENT_LOADER_HEADERS === 'string' &&
+				RAGConfig.EXTERNAL_DOCUMENT_LOADER_HEADERS.trim() !== ''
+					? JSON.parse(RAGConfig.EXTERNAL_DOCUMENT_LOADER_HEADERS)
+					: {},
 			MINERU_PARAMS:
 				typeof RAGConfig.MINERU_PARAMS === 'string' && RAGConfig.MINERU_PARAMS.trim() !== ''
 					? JSON.parse(RAGConfig.MINERU_PARAMS)
-					: {}
+					: {},
+			MINERU_FILE_EXTENSIONS: RAGConfig.MINERU_FILE_EXTENSIONS.split(',')
+				.map((ext) => ext.trim())
+				.filter((ext) => ext !== '')
 		});
 		dispatch('save');
 	};
@@ -266,6 +274,16 @@
 			typeof config.MINERU_PARAMS === 'object'
 				? JSON.stringify(config.MINERU_PARAMS ?? {}, null, 2)
 				: config.MINERU_PARAMS;
+
+		config.EXTERNAL_DOCUMENT_LOADER_HEADERS =
+			typeof config.EXTERNAL_DOCUMENT_LOADER_HEADERS === 'object'
+				? Object.keys(config.EXTERNAL_DOCUMENT_LOADER_HEADERS ?? {}).length > 0
+					? JSON.stringify(config.EXTERNAL_DOCUMENT_LOADER_HEADERS, null, 2)
+					: ''
+				: config.EXTERNAL_DOCUMENT_LOADER_HEADERS;
+
+		config.MINERU_FILE_EXTENSIONS = (config?.MINERU_FILE_EXTENSIONS ?? ['pdf']).join(', ');
+		config.RAG_TOKENIZER_MODEL = config?.RAG_TOKENIZER_MODEL ?? '';
 
 		RAGConfig = config;
 	});
@@ -557,17 +575,78 @@
 								</div>
 							</div>
 						{:else if RAGConfig.CONTENT_EXTRACTION_ENGINE === 'external'}
-							<div class="my-0.5 flex gap-2 pr-2">
-								<input
-									class="flex-1 w-full text-sm bg-transparent outline-hidden"
-									placeholder={$i18n.t('Enter External Document Loader URL')}
-									bind:value={RAGConfig.EXTERNAL_DOCUMENT_LOADER_URL}
-								/>
-								<SensitiveInput
-									placeholder={$i18n.t('Enter External Document Loader API Key')}
-									required={false}
-									bind:value={RAGConfig.EXTERNAL_DOCUMENT_LOADER_API_KEY}
-								/>
+							<div class="my-0.5 flex flex-col gap-2 pr-2">
+								<div class="flex gap-2">
+									<input
+										class="flex-1 w-full text-sm bg-transparent outline-hidden"
+										placeholder={$i18n.t('Enter External Document Loader URL')}
+										bind:value={RAGConfig.EXTERNAL_DOCUMENT_LOADER_URL}
+									/>
+									<SensitiveInput
+										placeholder={$i18n.t('Enter External Document Loader API Key')}
+										required={false}
+										bind:value={RAGConfig.EXTERNAL_DOCUMENT_LOADER_API_KEY}
+									/>
+								</div>
+								<div class="flex flex-col">
+									<div class="mb-0.5 text-xs text-gray-500">{$i18n.t('Headers')}</div>
+									<Tooltip
+										content={$i18n.t(
+											'Enter additional headers in JSON format (e.g. {"X-Custom-Header": "value"}'
+										)}
+									>
+										<Textarea
+											className="w-full text-sm outline-hidden"
+											bind:value={RAGConfig.EXTERNAL_DOCUMENT_LOADER_HEADERS}
+											placeholder={$i18n.t('Enter additional headers in JSON format')}
+											required={false}
+										/>
+									</Tooltip>
+									<button
+										type="button"
+										class="mt-1 flex items-center gap-1 text-xs text-gray-500 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-200 transition w-fit"
+										on:click={() =>
+											(showExternalDocumentLoaderHeadersHint =
+												!showExternalDocumentLoaderHeadersHint)}
+									>
+										<svg
+											xmlns="http://www.w3.org/2000/svg"
+											viewBox="0 0 20 20"
+											fill="currentColor"
+											class="w-3 h-3 transition-transform {showExternalDocumentLoaderHeadersHint
+												? 'rotate-90'
+												: ''}"
+										>
+											<path
+												fill-rule="evenodd"
+												d="M7.21 14.77a.75.75 0 01.02-1.06L11.168 10 7.23 6.29a.75.75 0 111.04-1.08l4.5 4.25a.75.75 0 010 1.08l-4.5 4.25a.75.75 0 01-1.06-.02z"
+												clip-rule="evenodd"
+											/>
+										</svg>
+										{$i18n.t('Header variables')}
+									</button>
+									{#if showExternalDocumentLoaderHeadersHint}
+										<div class="mt-1 text-xs text-gray-500 dark:text-gray-400 leading-5">
+											<div>
+												{$i18n.t('No additional headers are sent unless configured.')}
+											</div>
+											<div>
+												{$i18n.t('Example')}:
+												<code class="text-gray-700 dark:text-gray-300"
+													>{'{"X-OpenWebUI-File-Id": "{{FILE_ID}}"}'}</code
+												>
+											</div>
+											<div>
+												{$i18n.t('Available variables')}:
+												<code class="text-gray-700 dark:text-gray-300">{'{{FILE_ID}}'}</code>,
+												<code class="text-gray-700 dark:text-gray-300">{'{{FILE_NAME}}'}</code>,
+												<code class="text-gray-700 dark:text-gray-300"
+													>{'{{FILE_CONTENT_TYPE}}'}</code
+												>
+											</div>
+										</div>
+									{/if}
+								</div>
 							</div>
 						{:else if RAGConfig.CONTENT_EXTRACTION_ENGINE === 'tika'}
 							<div class="flex w-full mt-1">
@@ -645,6 +724,21 @@
 									placeholder={$i18n.t('Enter Mistral API Key')}
 									bind:value={RAGConfig.MISTRAL_OCR_API_KEY}
 								/>
+							</div>
+							<div class="flex justify-between w-full mt-2 pr-2">
+								<div class="self-center text-xs font-medium">
+									<Tooltip
+										content={$i18n.t(
+											'Send the PDF as a base64 data URL instead of uploading it first.'
+										)}
+										placement="top-start"
+									>
+										{$i18n.t('Use Base64')}
+									</Tooltip>
+								</div>
+								<div class="flex items-center">
+									<Switch bind:state={RAGConfig.MISTRAL_OCR_USE_BASE64} />
+								</div>
 							</div>
 						{:else if RAGConfig.CONTENT_EXTRACTION_ENGINE === 'paddleocr_vl'}
 							<div class="my-0.5 flex gap-2 pr-2">
@@ -743,6 +837,25 @@
 										minSize={100}
 									/>
 								</div>
+							</div>
+
+							<!-- File Extensions -->
+							<div class="flex flex-col justify-between w-full mt-2">
+								<div class="text-xs font-medium mb-1">
+									<Tooltip
+										content={$i18n.t(
+											'Comma-separated list of file extensions MinerU will handle (e.g. pdf, docx, pptx, xlsx)'
+										)}
+										placement="top-start"
+									>
+										{$i18n.t('File Extensions')}
+									</Tooltip>
+								</div>
+								<input
+									class="flex-1 w-full text-sm bg-transparent outline-hidden"
+									placeholder={$i18n.t('pdf, docx, pptx, xlsx')}
+									bind:value={RAGConfig.MINERU_FILE_EXTENSIONS}
+								/>
 							</div>
 						{/if}
 					</div>
@@ -880,19 +993,18 @@
 								<div class="flex items-center relative">
 									<select
 										class="w-fit pr-8 rounded-sm px-2 p-1 text-xs bg-transparent outline-hidden text-right"
-									bind:value={RAG_EMBEDDING_ENGINE}
-									placeholder={$i18n.t('Select an embedding model engine')}
-									on:change={(e) => {
-										if (e.target.value === 'openai') {
-											RAG_EMBEDDING_MODEL = 'text-embedding-3-small';
-										} else if (e.target.value === 'azure_openai') {
+										bind:value={RAG_EMBEDDING_ENGINE}
+										placeholder={$i18n.t('Select an embedding model engine')}
+										on:change={(e) => {
+											if (e.target.value === 'openai') {
 												RAG_EMBEDDING_MODEL = 'text-embedding-3-small';
-											} else if (e.target.value === '') {
-												RAG_EMBEDDING_MODEL = 'sentence-transformers/all-MiniLM-L6-v2';
+											} else if (e.target.value === 'azure_openai') {
+												RAG_EMBEDDING_MODEL = 'text-embedding-3-small';
 											}
 										}}
+										required
 									>
-										<option value="">{$i18n.t('Default (SentenceTransformers)')}</option>
+										<option value="" disabled>{$i18n.t('Select a provider')}</option>
 										<option value="openai">{$i18n.t('OpenAI')}</option>
 										<option value="azure_openai">{$i18n.t('Azure OpenAI')}</option>
 									</select>
@@ -952,36 +1064,6 @@
 												bind:value={RAG_EMBEDDING_MODEL}
 											/>
 										</div>
-
-										{#if RAG_EMBEDDING_ENGINE === ''}
-											<button
-												class="px-2.5 bg-transparent text-gray-800 dark:bg-transparent dark:text-gray-100 rounded-lg transition"
-												on:click={() => {
-													embeddingModelUpdateHandler();
-												}}
-												disabled={updateEmbeddingModelLoading}
-											>
-												{#if updateEmbeddingModelLoading}
-													<div class="self-center">
-														<Spinner />
-													</div>
-												{:else}
-													<svg
-														xmlns="http://www.w3.org/2000/svg"
-														viewBox="0 0 16 16"
-														fill="currentColor"
-														class="w-4 h-4"
-													>
-														<path
-															d="M8.75 2.75a.75.75 0 0 0-1.5 0v5.69L5.03 6.22a.75.75 0 0 0-1.06 1.06l3.5 3.5a.75.75 0 0 0 1.06 0l3.5-3.5a.75.75 0 0 0-1.06-1.06L8.75 8.44V2.75Z"
-														/>
-														<path
-															d="M3.5 9.75a.75.75 0 0 0-1.5 0v1.5A2.75 2.75 0 0 0 4.75 14h6.5A2.75 2.75 0 0 0 14 11.25v-1.5a.75.75 0 0 0-1.5 0v1.5c0 .69-.56 1.25-1.25 1.25h-6.5c-.69 0-1.25-.56-1.25-1.25v-1.5Z"
-														/>
-													</svg>
-												{/if}
-											</button>
-										{/if}
 									</div>
 								{/if}
 							</div>
@@ -1050,12 +1132,14 @@
 							</div>
 						{/if}
 					</div>
+				{/if}
 
-					<div class="mb-3">
-						<div class=" mt-0.5 mb-2.5 text-base font-medium">{$i18n.t('Retrieval')}</div>
+				<div class="mb-3">
+					<div class=" mt-0.5 mb-2.5 text-base font-medium">{$i18n.t('Retrieval')}</div>
 
-						<hr class=" border-gray-100/30 dark:border-gray-850/30 my-2" />
+					<hr class=" border-gray-100/30 dark:border-gray-850/30 my-2" />
 
+					{#if !RAGConfig.BYPASS_EMBEDDING_AND_RETRIEVAL}
 						<div class="  mb-2.5 flex w-full justify-between">
 							<div class=" self-center text-xs font-medium">{$i18n.t('Full Context Mode')}</div>
 							<div class="flex items-center relative">
@@ -1108,14 +1192,10 @@
 												bind:value={RAGConfig.RAG_RERANKING_ENGINE}
 												placeholder={$i18n.t('Select a reranking model engine')}
 												on:change={(e) => {
-													if (e.target.value === 'external') {
-														RAGConfig.RAG_RERANKING_MODEL = '';
-													} else if (e.target.value === '') {
-														RAGConfig.RAG_RERANKING_MODEL = 'BAAI/bge-reranker-v2-m3';
-													}
+													RAGConfig.RAG_RERANKING_MODEL = '';
 												}}
 											>
-												<option value="">{$i18n.t('Default (SentenceTransformers)')}</option>
+												<option value="">{$i18n.t('Disabled')}</option>
 												<option value="external">{$i18n.t('External')}</option>
 											</select>
 										</div>
@@ -1139,23 +1219,26 @@
 									{/if}
 								</div>
 
-								<div class="  mb-2.5 flex flex-col w-full">
-									<div class=" mb-1 text-xs font-medium">{$i18n.t('Reranking Model')}</div>
+								{#if RAGConfig.RAG_RERANKING_ENGINE === 'external'}
+									<div class="  mb-2.5 flex flex-col w-full">
+										<div class=" mb-1 text-xs font-medium">{$i18n.t('Reranking Model')}</div>
 
-									<div class="">
-										<div class="flex w-full">
-											<div class="flex-1 mr-2">
-												<input
-													class="flex-1 w-full text-sm bg-transparent outline-hidden"
-													placeholder={$i18n.t('Set reranking model (e.g. {{model}})', {
-														model: 'BAAI/bge-reranker-v2-m3'
-													})}
-													bind:value={RAGConfig.RAG_RERANKING_MODEL}
-												/>
+										<div class="">
+											<div class="flex w-full">
+												<div class="flex-1 mr-2">
+													<input
+														class="flex-1 w-full text-sm bg-transparent outline-hidden"
+														placeholder={$i18n.t('Set reranking model (e.g. {{model}})', {
+															model: 'BAAI/bge-reranker-v2-m3'
+														})}
+														bind:value={RAGConfig.RAG_RERANKING_MODEL}
+														required
+													/>
+												</div>
 											</div>
 										</div>
 									</div>
-								</div>
+								{/if}
 							{/if}
 
 							<div class="  mb-2.5 flex w-full justify-between">
@@ -1303,36 +1386,34 @@
 								</div>
 							{/if}
 						{/if}
+					{/if}
 
-						<div class="  mb-2.5 flex flex-col w-full justify-between">
-							<div class=" mb-1 text-xs font-medium">{$i18n.t('RAG Template')}</div>
-							<div class="flex w-full items-center relative">
-								<Tooltip
-									content={$i18n.t(
+					<div class="  mb-2.5 flex flex-col w-full justify-between">
+						<div class=" mb-1 text-xs font-medium">{$i18n.t('RAG Template')}</div>
+						<div class="flex w-full items-center relative">
+							<Tooltip
+								content={$i18n.t('Leave empty to use the default prompt, or enter a custom prompt')}
+								placement="top-start"
+								className="w-full"
+							>
+								<Textarea
+									bind:value={RAGConfig.RAG_TEMPLATE}
+									placeholder={$i18n.t(
 										'Leave empty to use the default prompt, or enter a custom prompt'
 									)}
-									placement="top-start"
-									className="w-full"
-								>
-									<Textarea
-										bind:value={RAGConfig.RAG_TEMPLATE}
-										placeholder={$i18n.t(
-											'Leave empty to use the default prompt, or enter a custom prompt'
-										)}
-									/>
-								</Tooltip>
-							</div>
-
-							{#if RAGConfig.RAG_TEMPLATE && (RAGConfig.RAG_TEMPLATE.match(/\[context\]/g) || []).length + (RAGConfig.RAG_TEMPLATE.match(/\{\{CONTEXT\}\}/g) || []).length > 1}
-								<div class="mt-1 text-xs text-gray-400 dark:text-gray-500">
-									{$i18n.t(
-										'This template contains multiple context placeholders ([context] or {{CONTEXT}}). Context will be injected at each occurrence.'
-									)}
-								</div>
-							{/if}
+								/>
+							</Tooltip>
 						</div>
+
+						{#if RAGConfig.RAG_TEMPLATE && (RAGConfig.RAG_TEMPLATE.match(/\[context\]/g) || []).length + (RAGConfig.RAG_TEMPLATE.match(/\{\{CONTEXT\}\}/g) || []).length > 1}
+							<div class="mt-1 text-xs text-gray-400 dark:text-gray-500">
+								{$i18n.t(
+									'This template contains multiple context placeholders ([context] or {{CONTEXT}}). Context will be injected at each occurrence.'
+								)}
+							</div>
+						{/if}
 					</div>
-				{/if}
+				</div>
 
 				<div class="mb-3">
 					<div class=" mt-0.5 mb-2.5 text-base font-medium">{$i18n.t('Files')}</div>
