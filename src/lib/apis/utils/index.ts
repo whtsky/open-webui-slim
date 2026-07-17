@@ -61,6 +61,11 @@ export const formatPythonCode = async (token: string, code: string) => {
 	return res;
 };
 
+// Stub: code execution is removed in the slim fork.
+export const executeCode = async (..._args: unknown[]) => {
+	throw new Error('Code execution is not available in the slim fork');
+};
+
 export const downloadChatAsPDF = async (token: string, title: string, messages: object[]) => {
 	let error = null;
 

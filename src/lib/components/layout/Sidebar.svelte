@@ -1,7 +1,6 @@
 <script lang="ts">
 	import { toast } from 'svelte-sonner';
 	import { v4 as uuidv4 } from 'uuid';
-	import Sortable from 'sortablejs';
 
 	import { goto } from '$app/navigation';
 	import {
@@ -17,11 +16,9 @@
 		mobile,
 		showArchivedChats,
 		pinnedChats,
-		pinnedNotes,
 		scrollPaginationEnabled,
 		currentChatPage,
 		temporaryChatEnabled,
-		channels,
 		socket,
 		config,
 		isApp,
@@ -42,15 +39,10 @@
 		toggleChatPinnedStatusById,
 		getChatById,
 		updateChatFolderIdById,
-		importChats,
-		deleteAllChats,
-		getChatListBySearchText
+		importChats
 	} from '$lib/apis/chats';
 	import { createNewFolder, getFolders, updateFolderParentIdById } from '$lib/apis/folders';
-	import { createNewNote, getPinnedNoteList, toggleNotePinnedStatusById } from '$lib/apis/notes';
-	import { updateUserSettings } from '$lib/apis/users';
 	import { checkActiveChats } from '$lib/apis/tasks';
-	import { createNoteHandler } from '$lib/components/notes/utils';
 	import { WEBUI_API_BASE_URL, WEBUI_BASE_URL } from '$lib/constants';
 
 	import ArchivedChatsModal from './ArchivedChatsModal.svelte';
@@ -61,22 +53,16 @@
 	import Folder from '../common/Folder.svelte';
 	import Tooltip from '../common/Tooltip.svelte';
 	import Folders from './Sidebar/Folders.svelte';
-	import { getChannels, createNewChannel } from '$lib/apis/channels';
-	import ChannelModal from './Sidebar/ChannelModal.svelte';
-	import ChannelItem from './Sidebar/ChannelItem.svelte';
 	import PencilSquare from '../icons/PencilSquare.svelte';
 	import Search from '../icons/Search.svelte';
 	import SearchModal from './SearchModal.svelte';
 	import FolderModal from './Sidebar/Folders/FolderModal.svelte';
 	import Sidebar from '../icons/Sidebar.svelte';
 	import PinnedModelList from './Sidebar/PinnedModelList.svelte';
-	import Note from '../icons/Note.svelte';
-	import Code from '../icons/Code.svelte';
 	import { slide } from 'svelte/transition';
 	import HotkeyHint from '../common/HotkeyHint.svelte';
 
 	const BREAKPOINT = 768;
-	const DEFAULT_PINNED_ITEMS = ['notes', 'workspace'];
 
 	let scrollTop = 0;
 
@@ -84,7 +70,6 @@
 	let shiftKey = false;
 
 	let selectedChatId = null;
-	let showCreateChannel = false;
 
 	// Pagination variables
 	let chatListLoading = false;
@@ -95,78 +80,12 @@
 	let pinnedModels = [];
 
 	let showPinnedModels = false;
-	let showPinnedNotes = false;
-	let showChannels = false;
 	let showFolders = false;
 
 	let folders = {};
 	let folderRegistry = {};
 
 	let newFolderId = null;
-
-	$: pinnedItems = $settings?.pinnedMenuItems ?? DEFAULT_PINNED_ITEMS;
-
-	const isMenuItemVisible = (id) => {
-		switch (id) {
-			case 'notes':
-				return (
-					($config?.features?.enable_notes ?? false) &&
-					($user?.role === 'admin' || ($user?.permissions?.features?.notes ?? true))
-				);
-			case 'workspace':
-				return (
-					$user?.role === 'admin' ||
-					$user?.permissions?.workspace?.models ||
-					$user?.permissions?.workspace?.knowledge ||
-					$user?.permissions?.workspace?.prompts ||
-					$user?.permissions?.workspace?.tools
-				);
-			case 'automations':
-				return (
-					$config?.features?.enable_automations &&
-					($user?.role === 'admin' || $user?.permissions?.features?.automations)
-				);
-			case 'calendar':
-				return (
-					$config?.features?.enable_calendar &&
-					($user?.role === 'admin' || $user?.permissions?.features?.calendar)
-				);
-			case 'playground':
-				return $user?.role === 'admin';
-			default:
-				return false;
-		}
-	};
-
-	const getMenuItemMeta = (id) => {
-		const items = {
-			notes: { label: 'Notes', href: '/notes', iconType: 'note' },
-			workspace: { label: 'Workspace', href: '/workspace', iconType: 'workspace' },
-			automations: { label: 'Automations', href: '/automations', iconType: 'automations' },
-			calendar: { label: 'Calendar', href: '/calendar', iconType: 'calendar' },
-			playground: { label: 'Playground', href: '/playground', iconType: 'playground' }
-		};
-		return items[id];
-	};
-
-	const initPinnedMenuSortable = () => {
-		const el = document.getElementById('pinned-menu-items-list');
-		if (el && !$mobile) {
-			new Sortable(el, {
-				animation: 150,
-				onUpdate: async (event) => {
-					const itemId = event.item.dataset.id;
-					const newIndex = event.newIndex;
-					const current = [...pinnedItems];
-					const oldIndex = current.indexOf(itemId);
-					current.splice(oldIndex, 1);
-					current.splice(newIndex, 0, itemId);
-					settings.set({ ...$settings, pinnedMenuItems: current });
-					await updateUserSettings(localStorage.token, { ui: $settings });
-				}
-			});
-		}
-	};
 
 	$: if ($selectedFolder) {
 		initFolders();
@@ -266,22 +185,6 @@
 		}
 	};
 
-	const initChannels = async () => {
-		// default (none), group, dm type
-		const res = await getChannels(localStorage.token).catch((error) => {
-			return null;
-		});
-
-		if (res) {
-			await channels.set(
-				res.sort(
-					(a, b) =>
-						['', null, 'group', 'dm'].indexOf(a.type) - ['', null, 'group', 'dm'].indexOf(b.type)
-				)
-			);
-		}
-	};
-
 	const initChatList = async () => {
 		// Reset pagination variables
 		console.log('initChatList');
@@ -300,16 +203,6 @@
 				console.log('Init pinned chats');
 				const _pinnedChats = await getPinnedChatList(localStorage.token);
 				pinnedChats.set(_pinnedChats);
-			})(),
-			await (async () => {
-				if (
-					$config?.features?.enable_notes &&
-					($user?.role === 'admin' || ($user?.permissions?.features?.notes ?? true))
-				) {
-					console.log('Init pinned notes');
-					const _pinnedNotes = await getPinnedNoteList(localStorage.token).catch(() => []);
-					pinnedNotes.set(_pinnedNotes);
-				}
 			})(),
 			await (async () => {
 				console.log('Init chat list');
@@ -503,7 +396,7 @@
 		document.documentElement.style.setProperty('--sidebar-width', `${newSidebarWidth}px`);
 	};
 
-	onMount(async () => {
+	onMount(() => {
 		try {
 			const width = Number(localStorage.getItem('sidebarWidth'));
 			if (!Number.isNaN(width) && width >= MIN_WIDTH && width <= MAX_WIDTH) {
@@ -550,13 +443,6 @@
 				}
 
 				if (value) {
-					// Only fetch channels if the feature is enabled and user has permission
-					if (
-						$config?.features?.enable_channels &&
-						($user?.role === 'admin' || ($user?.permissions?.features?.channels ?? true))
-					) {
-						await initChannels();
-					}
 					await initChatList();
 
 					// Check which chats have active tasks
@@ -598,9 +484,6 @@
 		const socketInstance = $socket;
 		socketInstance?.on('events', chatActiveEventHandler);
 
-		await tick();
-		initPinnedMenuSortable();
-
 		return () => {
 			unsubscribers.forEach((unsubscriber) => unsubscriber());
 
@@ -623,7 +506,7 @@
 		};
 	});
 
-	// Handler for chat events (defined outside onMount for proper cleanup)
+	// Handler for chat:active events (defined outside onMount for proper cleanup)
 	const chatActiveEventHandler = (event: {
 		chat_id: string;
 		message_id: string;
@@ -640,8 +523,6 @@
 				}
 				return newSet;
 			});
-		} else if (event.data?.type === 'chat:list') {
-			initChatList();
 		}
 	};
 
@@ -685,46 +566,6 @@
 		if ($chatId === id) {
 			goto('/');
 			chatId.set('');
-		}
-	}}
-/>
-
-<ChannelModal
-	bind:show={showCreateChannel}
-	onSubmit={async (payload: any) => {
-		let { type, name, is_private, access_grants, group_ids, user_ids } = payload ?? {};
-		name = name?.trim();
-
-		if (type === 'dm') {
-			if (!user_ids || user_ids.length === 0) {
-				toast.error($i18n.t('Please select at least one user for Direct Message channel.'));
-				return;
-			}
-		} else {
-			if (!name) {
-				toast.error($i18n.t('Channel name cannot be empty.'));
-				return;
-			}
-		}
-
-		const res = await createNewChannel(localStorage.token, {
-			type: type,
-			name: name,
-			is_private: is_private,
-			access_grants: access_grants,
-			group_ids: group_ids,
-			user_ids: user_ids
-		}).catch((error) => {
-			toast.error(`${error}`);
-			return null;
-		});
-
-		if (res) {
-			$socket.emit('join-channels', { auth: { token: $user?.token } });
-			await initChannels();
-			showCreateChannel = false;
-			showChannels = true;
-			goto(`/channels/${res.id}`);
 		}
 	}}
 />
@@ -856,80 +697,42 @@
 					</Tooltip>
 				</div>
 
-				{#each pinnedItems as itemId (itemId)}
-					{@const meta = getMenuItemMeta(itemId)}
-					{#if meta && isMenuItemVisible(itemId)}
-						<div class="">
-							<Tooltip content={$i18n.t(meta.label)} placement="right">
-								<a
-									class=" cursor-pointer flex rounded-xl hover:bg-gray-100 dark:hover:bg-gray-850 transition group"
-									href={meta.href}
-									on:click={async (e) => {
-										e.stopImmediatePropagation();
-										e.preventDefault();
-										goto(meta.href);
-										itemClickHandler();
-									}}
-									draggable="false"
-									aria-label={$i18n.t(meta.label)}
-								>
-									<div class=" self-center flex items-center justify-center size-9">
-										{#if itemId === 'notes'}
-											<Note className="size-4.5" />
-										{:else if itemId === 'workspace'}
-											<svg
-												xmlns="http://www.w3.org/2000/svg"
-												fill="none"
-												viewBox="0 0 24 24"
-												stroke-width="1.5"
-												stroke="currentColor"
-												class="size-4.5"
-											>
-												<path
-													stroke-linecap="round"
-													stroke-linejoin="round"
-													d="M13.5 16.875h3.375m0 0h3.375m-3.375 0V13.5m0 3.375v3.375M6 10.5h2.25a2.25 2.25 0 0 0 2.25-2.25V6a2.25 2.25 0 0 0-2.25-2.25H6A2.25 2.25 0 0 0 3.75 6v2.25A2.25 2.25 0 0 0 6 10.5Zm0 9.75h2.25A2.25 2.25 0 0 0 10.5 18v-2.25a2.25 2.25 0 0 0-2.25-2.25H6a2.25 2.25 0 0 0-2.25 2.25V18A2.25 2.25 0 0 0 6 20.25Zm9.75-9.75H18a2.25 2.25 0 0 0 2.25-2.25V6A2.25 2.25 0 0 0 18 3.75h-2.25A2.25 2.25 0 0 0 13.5 6v2.25a2.25 2.25 0 0 0 2.25 2.25Z"
-												/>
-											</svg>
-										{:else if itemId === 'automations'}
-											<svg
-												xmlns="http://www.w3.org/2000/svg"
-												fill="none"
-												viewBox="0 0 24 24"
-												stroke-width="1.5"
-												stroke="currentColor"
-												class="size-4.5"
-											>
-												<path
-													stroke-linecap="round"
-													stroke-linejoin="round"
-													d="M12 6v6h4.5m4.5 0a9 9 0 1 1-18 0 9 9 0 0 1 18 0Z"
-												/>
-											</svg>
-										{:else if itemId === 'calendar'}
-											<svg
-												xmlns="http://www.w3.org/2000/svg"
-												fill="none"
-												viewBox="0 0 24 24"
-												stroke-width="1.5"
-												stroke="currentColor"
-												class="size-4.5"
-											>
-												<path
-													stroke-linecap="round"
-													stroke-linejoin="round"
-													d="M6.75 3v2.25M17.25 3v2.25M3 18.75V7.5a2.25 2.25 0 0 1 2.25-2.25h13.5A2.25 2.25 0 0 1 21 7.5v11.25m-18 0A2.25 2.25 0 0 0 5.25 21h13.5A2.25 2.25 0 0 0 21 18.75m-18 0v-7.5A2.25 2.25 0 0 1 5.25 9h13.5A2.25 2.25 0 0 1 21 11.25v7.5"
-												/>
-											</svg>
-										{:else if itemId === 'playground'}
-											<Code className="size-4.5" />
-										{/if}
-									</div>
-								</a>
-							</Tooltip>
-						</div>
-					{/if}
-				{/each}
+				{#if $user?.role === 'admin' || $user?.permissions?.workspace?.models || $user?.permissions?.workspace?.knowledge || $user?.permissions?.workspace?.prompts || $user?.permissions?.workspace?.tools}
+					<div class="">
+						<Tooltip content={$i18n.t('Workspace')} placement="right">
+							<a
+								class=" cursor-pointer flex rounded-xl hover:bg-gray-100 dark:hover:bg-gray-850 transition group"
+								href="/workspace"
+								on:click={async (e) => {
+									e.stopImmediatePropagation();
+									e.preventDefault();
+
+									goto('/workspace');
+									itemClickHandler();
+								}}
+								aria-label={$i18n.t('Workspace')}
+								draggable="false"
+							>
+								<div class=" self-center flex items-center justify-center size-9">
+									<svg
+										xmlns="http://www.w3.org/2000/svg"
+										fill="none"
+										viewBox="0 0 24 24"
+										stroke-width="1.5"
+										stroke="currentColor"
+										class="size-4.5"
+									>
+										<path
+											stroke-linecap="round"
+											stroke-linejoin="round"
+											d="M13.5 16.875h3.375m0 0h3.375m-3.375 0V13.5m0 3.375v3.375M6 10.5h2.25a2.25 2.25 0 0 0 2.25-2.25V6a2.25 2.25 0 0 0-2.25-2.25H6A2.25 2.25 0 0 0 3.75 6v2.25A2.25 2.25 0 0 0 6 10.5Zm0 9.75h2.25A2.25 2.25 0 0 0 10.5 18v-2.25a2.25 2.25 0 0 0-2.25-2.25H6a2.25 2.25 0 0 0-2.25 2.25V18A2.25 2.25 0 0 0 6 20.25Zm9.75-9.75H18a2.25 2.25 0 0 0 2.25-2.25V6A2.25 2.25 0 0 0 18 3.75h-2.25A2.25 2.25 0 0 0 13.5 6v2.25a2.25 2.25 0 0 0 2.25 2.25Z"
+										/>
+									</svg>
+								</div>
+							</a>
+						</Tooltip>
+					</div>
+				{/if}
 			</div>
 		</button>
 
@@ -1017,7 +820,7 @@
 					/>
 				</a>
 
-				<a href="/" class="flex flex-1 px-0.5" on:click={newChatHandler}>
+				<a href="/" class="flex flex-1 px-1.5" on:click={newChatHandler}>
 					<div
 						id="sidebar-webui-name"
 						class=" self-center font-medium text-gray-850 dark:text-white font-primary"
@@ -1104,83 +907,39 @@
 						</button>
 					</div>
 
-					<div id="pinned-menu-items-list">
-						{#each pinnedItems as itemId (itemId)}
-							{@const meta = getMenuItemMeta(itemId)}
-							{#if meta && isMenuItemVisible(itemId)}
-								<div
-									class="px-[0.4375rem] flex justify-center text-gray-800 dark:text-gray-200"
-									data-id={itemId}
-								>
-									<a
-										id="sidebar-{itemId}-button"
-										class="grow flex items-center space-x-3 rounded-2xl px-2.5 py-2 hover:bg-gray-100 dark:hover:bg-gray-900 transition"
-										href={meta.href}
-										on:click={itemClickHandler}
-										draggable="false"
-										aria-label={$i18n.t(meta.label)}
+					{#if $user?.role === 'admin' || $user?.permissions?.workspace?.models || $user?.permissions?.workspace?.knowledge || $user?.permissions?.workspace?.prompts || $user?.permissions?.workspace?.tools}
+						<div class="px-[0.4375rem] flex justify-center text-gray-800 dark:text-gray-200">
+							<a
+								id="sidebar-workspace-button"
+								class="grow flex items-center space-x-3 rounded-2xl px-2.5 py-2 hover:bg-gray-100 dark:hover:bg-gray-900 transition"
+								href="/workspace"
+								on:click={itemClickHandler}
+								draggable="false"
+								aria-label={$i18n.t('Workspace')}
+							>
+								<div class="self-center">
+									<svg
+										xmlns="http://www.w3.org/2000/svg"
+										fill="none"
+										viewBox="0 0 24 24"
+										stroke-width="2"
+										stroke="currentColor"
+										class="size-4.5"
 									>
-										<div class="self-center">
-											{#if itemId === 'notes'}
-												<Note className="size-4.5" strokeWidth="2" />
-											{:else if itemId === 'workspace'}
-												<svg
-													xmlns="http://www.w3.org/2000/svg"
-													fill="none"
-													viewBox="0 0 24 24"
-													stroke-width="2"
-													stroke="currentColor"
-													class="size-4.5"
-												>
-													<path
-														stroke-linecap="round"
-														stroke-linejoin="round"
-														d="M13.5 16.875h3.375m0 0h3.375m-3.375 0V13.5m0 3.375v3.375M6 10.5h2.25a2.25 2.25 0 0 0 2.25-2.25V6a2.25 2.25 0 0 0-2.25-2.25H6A2.25 2.25 0 0 0 3.75 6v2.25A2.25 2.25 0 0 0 6 10.5Zm0 9.75h2.25A2.25 2.25 0 0 0 10.5 18v-2.25a2.25 2.25 0 0 0-2.25-2.25H6a2.25 2.25 0 0 0-2.25 2.25V18A2.25 2.25 0 0 0 6 20.25Zm9.75-9.75H18a2.25 2.25 0 0 0 2.25-2.25V6A2.25 2.25 0 0 0 18 3.75h-2.25A2.25 2.25 0 0 0 13.5 6v2.25a2.25 2.25 0 0 0 2.25 2.25Z"
-													/>
-												</svg>
-											{:else if itemId === 'automations'}
-												<svg
-													xmlns="http://www.w3.org/2000/svg"
-													fill="none"
-													viewBox="0 0 24 24"
-													stroke-width="2"
-													stroke="currentColor"
-													class="size-4.5"
-												>
-													<path
-														stroke-linecap="round"
-														stroke-linejoin="round"
-														d="M12 6v6h4.5m4.5 0a9 9 0 1 1-18 0 9 9 0 0 1 18 0Z"
-													/>
-												</svg>
-											{:else if itemId === 'calendar'}
-												<svg
-													xmlns="http://www.w3.org/2000/svg"
-													fill="none"
-													viewBox="0 0 24 24"
-													stroke-width="2"
-													stroke="currentColor"
-													class="size-4.5"
-												>
-													<path
-														stroke-linecap="round"
-														stroke-linejoin="round"
-														d="M6.75 3v2.25M17.25 3v2.25M3 18.75V7.5a2.25 2.25 0 0 1 2.25-2.25h13.5A2.25 2.25 0 0 1 21 7.5v11.25m-18 0A2.25 2.25 0 0 0 5.25 21h13.5A2.25 2.25 0 0 0 21 18.75m-18 0v-7.5A2.25 2.25 0 0 1 5.25 9h13.5A2.25 2.25 0 0 1 21 11.25v7.5"
-													/>
-												</svg>
-											{:else if itemId === 'playground'}
-												<Code className="size-4.5" strokeWidth="2" />
-											{/if}
-										</div>
-
-										<div class="flex self-center translate-y-[0.5px]">
-											<div class=" self-center text-sm font-primary">{$i18n.t(meta.label)}</div>
-										</div>
-									</a>
+										<path
+											stroke-linecap="round"
+											stroke-linejoin="round"
+											d="M13.5 16.875h3.375m0 0h3.375m-3.375 0V13.5m0 3.375v3.375M6 10.5h2.25a2.25 2.25 0 0 0 2.25-2.25V6a2.25 2.25 0 0 0-2.25-2.25H6A2.25 2.25 0 0 0 3.75 6v2.25A2.25 2.25 0 0 0 6 10.5Zm0 9.75h2.25A2.25 2.25 0 0 0 10.5 18v-2.25a2.25 2.25 0 0 0-2.25-2.25H6a2.25 2.25 0 0 0-2.25 2.25V18A2.25 2.25 0 0 0 6 20.25Zm9.75-9.75H18a2.25 2.25 0 0 0 2.25-2.25V6A2.25 2.25 0 0 0 18 3.75h-2.25A2.25 2.25 0 0 0 13.5 6v2.25a2.25 2.25 0 0 0 2.25 2.25Z"
+										/>
+									</svg>
 								</div>
-							{/if}
-						{/each}
-					</div>
+
+								<div class="flex self-center translate-y-[0.5px]">
+									<div class=" self-center text-sm font-primary">{$i18n.t('Workspace')}</div>
+								</div>
+							</a>
+						</div>
+					{/if}
 				</div>
 
 				{#if ($models ?? []).length > 0 && (($settings?.pinnedModels ?? []).length > 0 || $config?.default_pinned_models)}
@@ -1193,105 +952,6 @@
 						dragAndDrop={false}
 					>
 						<PinnedModelList bind:selectedChatId {shiftKey} />
-					</Folder>
-				{/if}
-
-				{#if ($config?.features?.enable_notes ?? false) && ($user?.role === 'admin' || ($user?.permissions?.features?.notes ?? true)) && $pinnedNotes.length > 0}
-					<Folder
-						id="sidebar-pinned-notes"
-						bind:open={showPinnedNotes}
-						className="px-2 mt-0.5"
-						name={$i18n.t('Notes')}
-						chevron={false}
-						dragAndDrop={false}
-						onAdd={async () => {
-							const note = await createNoteHandler('New Note');
-							if (note) {
-								goto(`/notes/${note.id}`);
-							}
-						}}
-						onAddLabel={$i18n.t('New Note')}
-					>
-						<div class="mt-0.5 pb-1.5">
-							{#each $pinnedNotes as note (note.id)}
-								<a
-									class="w-full flex items-center gap-2.5 rounded-xl px-2.5 py-1.5 hover:bg-gray-100 dark:hover:bg-gray-900 transition group text-sm"
-									href={`/notes/${note.id}`}
-									on:click={() => {
-										itemClickHandler();
-									}}
-									draggable="false"
-								>
-									<div class="self-center">
-										<Note className="size-4" strokeWidth="2" />
-									</div>
-									<div class="flex-1 text-ellipsis line-clamp-1">
-										{note.title}
-									</div>
-									<button
-										class="invisible group-hover:visible self-center p-0.5 hover:bg-gray-200 dark:hover:bg-gray-800 rounded-lg transition"
-										on:click|preventDefault|stopPropagation={async () => {
-											await toggleNotePinnedStatusById(localStorage.token, note.id);
-											const _pinnedNotes = await getPinnedNoteList(localStorage.token).catch(
-												() => []
-											);
-											pinnedNotes.set(_pinnedNotes);
-										}}
-										aria-label={$i18n.t('Unpin')}
-									>
-										<svg
-											xmlns="http://www.w3.org/2000/svg"
-											fill="none"
-											viewBox="0 0 24 24"
-											stroke-width="2"
-											stroke="currentColor"
-											class="size-3.5"
-										>
-											<path
-												stroke-linecap="round"
-												stroke-linejoin="round"
-												d="M6 18 18 6M6 6l12 12"
-											/>
-										</svg>
-									</button>
-								</a>
-							{/each}
-						</div>
-					</Folder>
-				{/if}
-
-				{#if $config?.features?.enable_channels && ($user?.role === 'admin' || ($user?.permissions?.features?.channels ?? true))}
-					<Folder
-						id="sidebar-channels"
-						bind:open={showChannels}
-						className="px-2 mt-0.5"
-						name={$i18n.t('Channels')}
-						chevron={false}
-						dragAndDrop={false}
-						onAdd={$user?.role === 'admin' || ($user?.permissions?.features?.channels ?? true)
-							? async () => {
-									await tick();
-
-									setTimeout(() => {
-										showCreateChannel = true;
-									}, 0);
-								}
-							: null}
-						onAddLabel={$i18n.t('Create Channel')}
-					>
-						{#each $channels as channel, channelIdx (`${channel?.id}`)}
-							<ChannelItem
-								{channel}
-								onUpdate={async () => {
-									await initChannels();
-								}}
-							/>
-
-							{#if channelIdx < $channels.length - 1 && channel.type !== $channels[channelIdx + 1]?.type}<hr
-									class=" border-gray-100/40 dark:border-gray-800/10 my-1.5 w-full"
-								/>
-							{/if}
-						{/each}
 					</Folder>
 				{/if}
 
@@ -1478,8 +1138,6 @@
 												id={chat.id}
 												title={chat.title}
 												createdAt={chat.created_at}
-												updatedAt={chat.updated_at}
-												lastReadAt={chat.last_read_at}
 												{shiftKey}
 												selected={selectedChatId === chat.id}
 												on:select={() => {
@@ -1541,8 +1199,6 @@
 										id={chat.id}
 										title={chat.title}
 										createdAt={chat.created_at}
-										updatedAt={chat.updated_at}
-										lastReadAt={chat.last_read_at}
 										{shiftKey}
 										selected={selectedChatId === chat.id}
 										on:select={() => {

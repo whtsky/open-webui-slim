@@ -79,15 +79,12 @@ from open_webui.routers import (
     analytics,
     audio,
     images,
-    ollama,
     openai,
     retrieval,
     pipelines,
     tasks,
     auths,
-    channels,
     chats,
-    notes,
     folders,
     configs,
     groups,
@@ -97,13 +94,11 @@ from open_webui.routers import (
     models,
     knowledge,
     prompts,
-    evaluations,
     skills,
     tools,
     users,
     utils,
     scim,
-    terminals,
     automations,
     calendar,
 )
@@ -398,9 +393,7 @@ from open_webui.config import (
     ENABLE_AUTOMATIONS,
     AUTOMATION_MAX_COUNT,
     AUTOMATION_MIN_INTERVAL,
-    ENABLE_CHANNELS,
     ENABLE_CALENDAR,
-    ENABLE_NOTES,
     ENABLE_USER_STATUS,
     ENABLE_COMMUNITY_SHARING,
     ENABLE_MESSAGE_RATING,
@@ -906,9 +899,7 @@ app.state.config.FOLDER_MAX_FILE_COUNT = FOLDER_MAX_FILE_COUNT
 app.state.config.ENABLE_AUTOMATIONS = ENABLE_AUTOMATIONS
 app.state.config.AUTOMATION_MAX_COUNT = AUTOMATION_MAX_COUNT
 app.state.config.AUTOMATION_MIN_INTERVAL = AUTOMATION_MIN_INTERVAL
-app.state.config.ENABLE_CHANNELS = ENABLE_CHANNELS
 app.state.config.ENABLE_CALENDAR = ENABLE_CALENDAR
-app.state.config.ENABLE_NOTES = ENABLE_NOTES
 app.state.config.ENABLE_COMMUNITY_SHARING = ENABLE_COMMUNITY_SHARING
 app.state.config.ENABLE_MESSAGE_RATING = ENABLE_MESSAGE_RATING
 app.state.config.ENABLE_USER_WEBHOOKS = ENABLE_USER_WEBHOOKS
@@ -1175,20 +1166,12 @@ app.state.EMBEDDING_FUNCTION = get_embedding_function(
     url=(
         app.state.config.RAG_OPENAI_API_BASE_URL
         if app.state.config.RAG_EMBEDDING_ENGINE == 'openai'
-        else (
-            app.state.config.RAG_OLLAMA_BASE_URL
-            if app.state.config.RAG_EMBEDDING_ENGINE == 'ollama'
-            else app.state.config.RAG_AZURE_OPENAI_BASE_URL
-        )
+        else app.state.config.RAG_AZURE_OPENAI_BASE_URL
     ),
     key=(
         app.state.config.RAG_OPENAI_API_KEY
         if app.state.config.RAG_EMBEDDING_ENGINE == 'openai'
-        else (
-            app.state.config.RAG_OLLAMA_API_KEY
-            if app.state.config.RAG_EMBEDDING_ENGINE == 'ollama'
-            else app.state.config.RAG_AZURE_OPENAI_API_KEY
-        )
+        else app.state.config.RAG_AZURE_OPENAI_API_KEY
     ),
     embedding_batch_size=app.state.config.RAG_EMBEDDING_BATCH_SIZE,
     azure_api_version=(
@@ -1403,7 +1386,6 @@ app.add_middleware(
 app.mount('/ws', socket_app)
 
 
-app.include_router(ollama.router, prefix='/ollama', tags=['ollama'])
 app.include_router(openai.router, prefix='/openai', tags=['openai'])
 
 
@@ -1420,9 +1402,7 @@ app.include_router(auths.router, prefix='/api/v1/auths', tags=['auths'])
 app.include_router(users.router, prefix='/api/v1/users', tags=['users'])
 
 
-app.include_router(channels.router, prefix='/api/v1/channels', tags=['channels'])
 app.include_router(chats.router, prefix='/api/v1/chats', tags=['chats'])
-app.include_router(notes.router, prefix='/api/v1/notes', tags=['notes'])
 
 
 app.include_router(models.router, prefix='/api/v1/models', tags=['models'])
@@ -1436,11 +1416,9 @@ app.include_router(folders.router, prefix='/api/v1/folders', tags=['folders'])
 app.include_router(groups.router, prefix='/api/v1/groups', tags=['groups'])
 app.include_router(files.router, prefix='/api/v1/files', tags=['files'])
 app.include_router(functions.router, prefix='/api/v1/functions', tags=['functions'])
-app.include_router(evaluations.router, prefix='/api/v1/evaluations', tags=['evaluations'])
 if ENABLE_ADMIN_ANALYTICS:
     app.include_router(analytics.router, prefix='/api/v1/analytics', tags=['analytics'])
 app.include_router(utils.router, prefix='/api/v1/utils', tags=['utils'])
-app.include_router(terminals.router, prefix='/api/v1/terminals', tags=['terminals'])
 app.include_router(automations.router, prefix='/api/v1/automations', tags=['automations'])
 app.include_router(calendar.router, prefix='/api/v1/calendars', tags=['calendars'])
 
@@ -2242,10 +2220,8 @@ async def get_app_config(request: Request):
                     'enable_direct_connections': app.state.config.ENABLE_DIRECT_CONNECTIONS,
                     'enable_folders': app.state.config.ENABLE_FOLDERS,
                     'folder_max_file_count': app.state.config.FOLDER_MAX_FILE_COUNT,
-                    'enable_channels': app.state.config.ENABLE_CHANNELS,
                     'enable_calendar': app.state.config.ENABLE_CALENDAR,
                     'enable_automations': app.state.config.ENABLE_AUTOMATIONS,
-                    'enable_notes': app.state.config.ENABLE_NOTES,
                     'enable_web_search': app.state.config.ENABLE_WEB_SEARCH,
                     'enable_code_execution': app.state.config.ENABLE_CODE_EXECUTION,
                     'enable_code_interpreter': app.state.config.ENABLE_CODE_INTERPRETER,

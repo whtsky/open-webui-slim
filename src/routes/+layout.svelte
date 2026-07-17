@@ -1,7 +1,5 @@
 <script>
-	import { io } from 'socket.io-client';
 	import { spring } from 'svelte/motion';
-	import PyodideWorker from '$lib/workers/pyodide.worker?worker';
 	import { Toaster, toast } from 'svelte-sonner';
 
 	let loadingProgress = spring(0, {
@@ -19,7 +17,6 @@
 		WEBUI_DEPLOYMENT_ID,
 		mobile,
 		socket,
-		socketConnected,
 		chatId,
 		chats,
 		currentChatPage,
@@ -30,16 +27,10 @@
 		appInfo,
 		toolServers,
 		playingNotificationSound,
-		channels,
-		channelId,
-		terminalServers,
 		showControls,
 		showFileNavPath,
-		showFileNavDir,
-		pyodideWorker,
-		desktopEvent
+		showFileNavDir
 	} from '$lib/stores';
-	import { getFileContentById } from '$lib/apis/files';
 	import { goto } from '$app/navigation';
 	import { page } from '$app/stores';
 	import { beforeNavigate } from '$app/navigation';
@@ -52,27 +43,20 @@
 	import 'tippy.js/dist/tippy.css';
 
 	import { executeToolServer, getBackendConfig, getModels, getVersion } from '$lib/apis';
-	import { getSessionUser, updateUserTimezone, userSignOut } from '$lib/apis/auths';
+	import { getSessionUser, userSignOut } from '$lib/apis/auths';
 	import { getAllTags, getChatList } from '$lib/apis/chats';
 	import { chatCompletion } from '$lib/apis/openai';
-	import {
-		addOpenAIConnection,
-		removeOpenAIConnection,
-		addTerminalConnection,
-		removeTerminalConnection
-	} from '$lib/utils/connections';
+	import { addOpenAIConnection, removeOpenAIConnection } from '$lib/utils/connections';
 
 	import { WEBUI_API_BASE_URL, WEBUI_BASE_URL, WEBUI_HOSTNAME } from '$lib/constants';
-	import { bestMatchingLanguage, displayFileHandler, getUserTimezone } from '$lib/utils';
+	import { bestMatchingLanguage, displayFileHandler } from '$lib/utils';
 	import { setTextScale } from '$lib/utils/text-scale';
 
 	import NotificationToast from '$lib/components/NotificationToast.svelte';
 	import AppSidebar from '$lib/components/app/AppSidebar.svelte';
-	import SyncStatsModal from '$lib/components/chat/Settings/SyncStatsModal.svelte';
 	import Spinner from '$lib/components/common/Spinner.svelte';
 	import { getUserSettings } from '$lib/apis/users';
 	import dayjs from 'dayjs';
-	import { getChannels } from '$lib/apis/channels';
 
 	const unregisterServiceWorkers = async () => {
 		if ('serviceWorker' in navigator) {
@@ -105,14 +89,12 @@
 
 	let showRefresh = false;
 
-	let showSyncStatsModal = false;
-	let syncStatsEventData = null;
-
 	let heartbeatInterval = null;
 
 	const BREAKPOINT = 768;
 
 	const setupSocket = async (enableWebsocket) => {
+		const { io } = await import('socket.io-client');
 		const _socket = io(`${WEBUI_BASE_URL}` || undefined, {
 			reconnection: true,
 			reconnectionDelay: 1000,
@@ -128,17 +110,8 @@
 			console.log('connect_error', err);
 		});
 
-		let hasConnectedOnce = false;
-
 		_socket.on('connect', async () => {
 			console.log('connected', _socket.id);
-
-			if (hasConnectedOnce) {
-				socketConnected.set(true);
-				toast.success($i18n.t('Reconnected'));
-			}
-			hasConnectedOnce = true;
-
 			const res = await getVersion(localStorage.token);
 
 			const deploymentId = res?.deployment_id ?? null;
@@ -169,7 +142,6 @@
 
 			if (version !== null) {
 				WEBUI_VERSION.set(version);
-				window.WEBUI_VERSION = version;
 			}
 
 			console.log('version', version);
@@ -192,8 +164,6 @@
 
 		_socket.on('disconnect', (reason, details) => {
 			console.log(`Socket ${_socket.id} disconnected due to ${reason}`);
-			socketConnected.set(false);
-			toast.warning($i18n.t('Connection lost. Reconnecting...'));
 
 			if (heartbeatInterval) {
 				clearInterval(heartbeatInterval);
@@ -206,178 +176,10 @@
 		});
 	};
 
-	/**
-	 * Get or create the persistent Pyodide worker.
-	 * The worker persists across executions so the virtual FS (IDBFS) is preserved.
-	 */
-	const getOrCreateWorker = () => {
-		let worker = $pyodideWorker;
-		if (!worker) {
-			worker = new PyodideWorker();
-			pyodideWorker.set(worker);
-		}
-		return worker;
-	};
-
-	const executePythonAsWorker = async (id, code, cb, files = []) => {
-		let result = null;
-		let stdout = null;
-		let stderr = null;
-
-		let executing = true;
-		let packages = [
-			/\bimport\s+requests\b|\bfrom\s+requests\b/.test(code) ? 'requests' : null,
-			/\bimport\s+bs4\b|\bfrom\s+bs4\b/.test(code) ? 'beautifulsoup4' : null,
-			/\bimport\s+numpy\b|\bfrom\s+numpy\b/.test(code) ? 'numpy' : null,
-			/\bimport\s+pandas\b|\bfrom\s+pandas\b/.test(code) ? 'pandas' : null,
-			/\bimport\s+matplotlib\b|\bfrom\s+matplotlib\b/.test(code) ? 'matplotlib' : null,
-			/\bimport\s+seaborn\b|\bfrom\s+seaborn\b/.test(code) ? 'seaborn' : null,
-			/\bimport\s+sklearn\b|\bfrom\s+sklearn\b/.test(code) ? 'scikit-learn' : null,
-			/\bimport\s+scipy\b|\bfrom\s+scipy\b/.test(code) ? 'scipy' : null,
-			/\bimport\s+re\b|\bfrom\s+re\b/.test(code) ? 'regex' : null,
-			/\bimport\s+seaborn\b|\bfrom\s+seaborn\b/.test(code) ? 'seaborn' : null,
-			/\bimport\s+sympy\b|\bfrom\s+sympy\b/.test(code) ? 'sympy' : null,
-			/\bimport\s+tiktoken\b|\bfrom\s+tiktoken\b/.test(code) ? 'tiktoken' : null,
-			/\bimport\s+pytz\b|\bfrom\s+pytz\b/.test(code) ? 'pytz' : null
-		].filter(Boolean);
-
-		const worker = getOrCreateWorker();
-
-		// Fetch file content from the server and prepare for the worker
-		let filePayloads = [];
-		if (files && files.length > 0) {
-			for (const file of files) {
-				try {
-					const fileId = file?.id;
-					const fileName = file?.filename || file?.name || 'file';
-					if (fileId) {
-						const content = await getFileContentById(fileId);
-						if (content) {
-							filePayloads.push({ name: fileName, data: content });
-						}
-					}
-				} catch (e) {
-					console.error('Failed to fetch file for Pyodide:', e);
-				}
-			}
-		}
-
-		worker.postMessage({
-			type: 'execute',
-			id: id,
-			code: code,
-			packages: packages,
-			files: filePayloads.length > 0 ? filePayloads : undefined
-		});
-
-		// Timeout for this specific execution (not the worker itself)
-		let timeoutId = setTimeout(() => {
-			if (executing) {
-				executing = false;
-				stderr = 'Execution Time Limit Exceeded';
-
-				// Terminate and recreate the worker on timeout
-				worker.terminate();
-				pyodideWorker.set(null);
-
-				if (cb) {
-					cb(
-						JSON.parse(
-							JSON.stringify(
-								{
-									stdout: stdout,
-									stderr: stderr,
-									result: result
-								},
-								(_key, value) => (typeof value === 'bigint' ? value.toString() : value)
-							)
-						)
-					);
-				}
-			}
-		}, 60000);
-
-		// Use addEventListener so multiple concurrent executions don't clobber each other
-		const onMessage = (event) => {
-			const { id: eventId, ...data } = event.data;
-			// Only handle responses for this execution ID
-			if (eventId !== id) return;
-			// Ignore FS responses (they use a type field)
-			if (data.type && data.type.startsWith('fs:')) return;
-
-			console.log('pyodideWorker.onmessage', event);
-			clearTimeout(timeoutId);
-			worker.removeEventListener('message', onMessage);
-			worker.removeEventListener('error', onError);
-
-			data['stdout'] && (stdout = data['stdout']);
-			data['stderr'] && (stderr = data['stderr']);
-			data['result'] && (result = data['result']);
-
-			if (cb) {
-				cb(
-					JSON.parse(
-						JSON.stringify(
-							{
-								stdout: stdout,
-								stderr: stderr,
-								result: result
-							},
-							(_key, value) => (typeof value === 'bigint' ? value.toString() : value)
-						)
-					)
-				);
-			}
-
-			executing = false;
-		};
-
-		const onError = (event) => {
-			console.log('pyodideWorker.onerror', event);
-			clearTimeout(timeoutId);
-			worker.removeEventListener('message', onMessage);
-			worker.removeEventListener('error', onError);
-
-			if (cb) {
-				cb(
-					JSON.parse(
-						JSON.stringify(
-							{
-								stdout: stdout,
-								stderr: stderr,
-								result: result
-							},
-							(_key, value) => (typeof value === 'bigint' ? value.toString() : value)
-						)
-					)
-				);
-			}
-			executing = false;
-		};
-
-		worker.addEventListener('message', onMessage);
-		worker.addEventListener('error', onError);
-	};
-
 	const resolveToolServer = (serverUrl) => {
 		let toolServer = $settings?.toolServers?.find((server) => server.url === serverUrl);
-		if (!toolServer) {
-			const terminalServer = ($settings?.terminalServers ?? []).find(
-				(server) => server.url === serverUrl
-			);
-			if (terminalServer) {
-				toolServer = {
-					url: terminalServer.url,
-					auth_type: terminalServer.auth_type ?? 'bearer',
-					key: terminalServer.key ?? '',
-					path: terminalServer.path ?? '/openapi.json'
-				};
-			}
-		}
 
-		let toolServerData =
-			$toolServers?.find((server) => server.url === serverUrl) ??
-			$terminalServers?.find((server) => server.url === serverUrl);
+		let toolServerData = $toolServers?.find((server) => server.url === serverUrl);
 
 		let token = null;
 		if (toolServer) {
@@ -389,7 +191,7 @@
 		return { toolServer, toolServerData, token };
 	};
 
-	const executeTool = async (data, cb, chatId) => {
+	const executeTool = async (data, cb) => {
 		const { toolServer, toolServerData, token } = resolveToolServer(data.server?.url);
 
 		console.log('executeTool', data, toolServer);
@@ -400,8 +202,7 @@
 				toolServer.url,
 				data?.name,
 				data?.params,
-				toolServerData,
-				chatId
+				toolServerData
 			);
 
 			console.log('executeToolServer', res);
@@ -437,13 +238,13 @@
 			return;
 		}
 
-		let isInBackground = document.visibilityState !== 'visible';
+		let isFocused = document.visibilityState !== 'visible';
 		if (window.electronAPI) {
 			const res = await window.electronAPI.send({
 				type: 'window:isFocused'
 			});
 			if (res) {
-				isInBackground = !res.isFocused;
+				isFocused = res.isFocused;
 			}
 		}
 
@@ -451,48 +252,13 @@
 		const type = event?.data?.type ?? null;
 		const data = event?.data?.data ?? null;
 
-		// Calendar alerts are not chat-scoped — handle before chat_id checks
-		if (type === 'calendar:alert' && data) {
-			const timeStr =
-				data.minutes_until <= 0
-					? $i18n.t('Starting now')
-					: data.minutes_until === 1
-						? $i18n.t('Starting in 1 minute')
-						: $i18n.t('Starting in {{count}} minutes', { count: data.minutes_until });
-
-			toast.custom(NotificationToast, {
-				componentProps: {
-					onClick: () => {
-						goto('/calendar');
-					},
-					title: data.title,
-					content: timeStr
-				},
-				duration: 30000,
-				unstyled: true
-			});
-
-			if ($isLastActiveTab) {
-				if ($settings?.notificationEnabled ?? false) {
-					new Notification(`${data.title} • Open WebUI`, {
-						body: timeStr,
-						icon: `${WEBUI_BASE_URL}/static/favicon.png`
-					});
-				}
-			}
-			return;
-		}
-
-		if ((event.chat_id !== $chatId && !$temporaryChatEnabled) || isInBackground) {
+		if ((event.chat_id !== $chatId && !$temporaryChatEnabled) || isFocused) {
 			if (type === 'chat:completion') {
 				const { done, content, title } = data;
 				const displayTitle = title || $i18n.t('New Chat');
 
 				if (done) {
-					if (
-						($settings?.notificationSound ?? true) &&
-						($settings?.notificationSoundAlways ?? false)
-					) {
+					if ($settings?.notificationSoundAlways ?? false) {
 						playingNotificationSound.set(true);
 
 						const audio = new Audio(`/audio/notification.mp3`);
@@ -530,12 +296,9 @@
 				tags.set(await getAllTags(localStorage.token));
 			}
 		} else if (data?.session_id === $socket.id) {
-			if (type === 'execute:python') {
-				console.log('execute:python', data);
-				executePythonAsWorker(data.id, data.code, cb, data.files || []);
-			} else if (type === 'execute:tool') {
+			if (type === 'execute:tool') {
 				console.log('execute:tool', data);
-				executeTool(data, cb, event.chat_id);
+				executeTool(data, cb);
 			} else if (type === 'request:chat:completion') {
 				console.log(data, $socket.id);
 				const { session_id, channel, form_data, model } = data;
@@ -627,108 +390,6 @@
 		}
 	};
 
-	const channelEventHandler = async (event) => {
-		console.log('channelEventHandler', event);
-		if (event.data?.type === 'typing') {
-			return;
-		}
-
-		// handle channel created event
-		if (event.data?.type === 'channel:created') {
-			const res = await getChannels(localStorage.token).catch(async (error) => {
-				return null;
-			});
-
-			if (res) {
-				await channels.set(
-					res.sort(
-						(a, b) =>
-							['', null, 'group', 'dm'].indexOf(a.type) - ['', null, 'group', 'dm'].indexOf(b.type)
-					)
-				);
-			}
-
-			return;
-		}
-
-		// check url path
-		const channel = $page.url.pathname.includes(`/channels/${event.channel_id}`);
-
-		let isInBackground = document.visibilityState !== 'visible';
-		if (window.electronAPI) {
-			const res = await window.electronAPI.send({
-				type: 'window:isFocused'
-			});
-			if (res) {
-				isInBackground = !res.isFocused;
-			}
-		}
-
-		if ((!channel || isInBackground) && event?.user?.id !== $user?.id) {
-			await tick();
-			const type = event?.data?.type ?? null;
-			const data = event?.data?.data ?? null;
-
-			if ($channels) {
-				if ($channels.find((ch) => ch.id === event.channel_id) && $channelId !== event.channel_id) {
-					channels.set(
-						$channels.map((ch) => {
-							if (ch.id === event.channel_id) {
-								if (type === 'message') {
-									return {
-										...ch,
-										unread_count: (ch.unread_count ?? 0) + 1,
-										last_message_at: event.created_at
-									};
-								}
-							}
-							return ch;
-						})
-					);
-				} else {
-					const res = await getChannels(localStorage.token).catch(async (error) => {
-						return null;
-					});
-
-					if (res) {
-						await channels.set(
-							res.sort(
-								(a, b) =>
-									['', null, 'group', 'dm'].indexOf(a.type) -
-									['', null, 'group', 'dm'].indexOf(b.type)
-							)
-						);
-					}
-				}
-			}
-
-			if (type === 'message') {
-				const title = `${data?.user?.name}${event?.channel?.type !== 'dm' ? ` (#${event?.channel?.name})` : ''}`;
-
-				if ($isLastActiveTab) {
-					if ($settings?.notificationEnabled ?? false) {
-						new Notification(`${title} • Open WebUI`, {
-							body: data?.content,
-							icon: `${WEBUI_API_BASE_URL}/users/${data?.user?.id}/profile/image`
-						});
-					}
-				}
-
-				toast.custom(NotificationToast, {
-					componentProps: {
-						onClick: () => {
-							goto(`/channels/${event.channel_id}`);
-						},
-						content: data?.content,
-						title: `${title}`
-					},
-					duration: 15000,
-					unstyled: true
-				});
-			}
-		}
-	};
-
 	const TOKEN_EXPIRY_BUFFER = 60; // seconds
 	const checkTokenExpiry = async () => {
 		const exp = $user?.expires_at; // token expiry time in unix timestamp
@@ -758,36 +419,6 @@
 			await goto(event.data.path);
 			return;
 		}
-		if (event.type === 'query' && (event.data?.query || event.data?.files?.length)) {
-			desktopEvent.set(event);
-			await goto('/');
-			return;
-		}
-		if (event.type === 'call') {
-			desktopEvent.set(event);
-			await goto('/');
-			return;
-		}
-		if (event.type === 'theme:update' && event.data?.theme) {
-			const newTheme = event.data.theme;
-			localStorage.setItem('theme', newTheme);
-			theme.set(newTheme);
-
-			// Apply theme classes (mirrors logic from chat/Settings/General.svelte)
-			const themes = ['dark', 'light', 'oled-dark'];
-			let themeToApply =
-				newTheme === 'oled-dark' ? 'dark' : newTheme === 'her' ? 'light' : newTheme;
-			if (newTheme === 'system') {
-				themeToApply = window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
-			}
-			themes
-				.filter((e) => e !== themeToApply)
-				.forEach((e) => {
-					e.split(' ').forEach((cls) => document.documentElement.classList.remove(cls));
-				});
-			themeToApply.split(' ').forEach((cls) => document.documentElement.classList.add(cls));
-			return;
-		}
 		if (event.type === 'models:refresh') {
 			const token = localStorage.token;
 			if (token) {
@@ -810,17 +441,7 @@
 		if ($user?.role !== 'admin') return;
 
 		try {
-			if (event.type === 'connections:terminal') {
-				if (event.data.action === 'add') {
-					await addTerminalConnection(token, {
-						url: event.data.url,
-						key: event.data.key,
-						name: 'Local Open Terminal'
-					});
-				} else if (event.data.action === 'remove') {
-					await removeTerminalConnection(token, event.data.url);
-				}
-			} else if (event.type === 'connections:openai') {
+			if (event.type === 'connections:openai') {
 				if (event.data.action === 'add') {
 					await addOpenAIConnection(token, {
 						url: event.data.url,
@@ -835,24 +456,7 @@
 		}
 	};
 
-	const windowMessageEventHandler = async (event) => {
-		if (
-			!['https://openwebui.com', 'https://www.openwebui.com', 'http://localhost:9999'].includes(
-				event.origin
-			)
-		) {
-			return;
-		}
-
-		if (event.data === 'export:stats' || event.data?.type === 'export:stats') {
-			syncStatsEventData = event.data;
-			showSyncStatsModal = true;
-		}
-	};
-
 	onMount(async () => {
-		window.addEventListener('message', windowMessageEventHandler);
-
 		let touchstartY = 0;
 
 		function isNavOrDescendant(el) {
@@ -957,10 +561,8 @@
 		user.subscribe(async (value) => {
 			if (value) {
 				$socket?.off('events', chatEventHandler);
-				$socket?.off('events:channel', channelEventHandler);
 
 				$socket?.on('events', chatEventHandler);
-				$socket?.on('events:channel', channelEventHandler);
 
 				const userSettings = await getUserSettings(localStorage.token);
 				if (userSettings) {
@@ -977,7 +579,6 @@
 				tokenTimer = setInterval(checkTokenExpiry, 15000);
 			} else {
 				$socket?.off('events', chatEventHandler);
-				$socket?.off('events:channel', channelEventHandler);
 			}
 		});
 
@@ -1035,22 +636,6 @@
 						} catch (error) {
 							console.error('Error refreshing backend config:', error);
 						}
-
-						// Keep user timezone in sync on every app load/refresh
-						const timezone = getUserTimezone();
-						if (timezone) {
-							updateUserTimezone(localStorage.token, timezone);
-						}
-
-						// Relay auth token to desktop app for API access
-						if (window.electronAPI?.send) {
-							window.electronAPI
-								.send({
-									type: 'token:update',
-									token: localStorage.token
-								})
-								.catch(() => {});
-						}
 					} else {
 						// Redirect Invalid Session User to /auth Page
 						localStorage.removeItem('token');
@@ -1101,18 +686,8 @@
 			loaded = true;
 		}
 
-		// Auto-show SyncStatsModal when opened with ?sync=true (from community)
-		if (
-			(window.opener ?? false) &&
-			$page.url.searchParams.get('sync') === 'true' &&
-			($config?.features?.enable_community_sharing ?? false)
-		) {
-			showSyncStatsModal = true;
-		}
-
 		return () => {
 			window.removeEventListener('resize', onResize);
-			window.removeEventListener('message', windowMessageEventHandler);
 			document.removeEventListener('touchstart', touchstartHandler);
 			document.removeEventListener('touchmove', touchmoveHandler);
 			document.removeEventListener('touchend', touchendHandler);
@@ -1158,10 +733,6 @@
 	{:else}
 		<slot />
 	{/if}
-{/if}
-
-{#if $config?.features.enable_community_sharing}
-	<SyncStatsModal bind:show={showSyncStatsModal} eventData={syncStatsEventData} />
 {/if}
 
 <Toaster
